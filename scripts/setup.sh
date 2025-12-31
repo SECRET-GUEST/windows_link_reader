@@ -31,8 +31,16 @@ else
   pause_end; exit 1
 fi
 
-say "[*] Building open_lnk from lnkReader.c with $CC..."
-"$CC" lnkReader.c -o open_lnk -Wall -Wextra -O2
+say "[*] Building open_lnk from ./src with $CC..."
+SRC_FILES=(src/main.c src/lnk/*.c src/platform/*.c src/resolve/*.c src/util/*.c)
+for f in "${SRC_FILES[@]}"; do
+  if [ ! -f "$f" ]; then
+    err "Missing source file: $f"
+    pause_end; exit 1
+  fi
+done
+
+"$CC" "${SRC_FILES[@]}" -Iinclude -D_XOPEN_SOURCE=700 -o open_lnk -Wall -Wextra -O2
 
 #  install binary (system then user fallback) 
 BIN_SYS="/usr/local/bin/open_lnk"
