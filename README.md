@@ -12,90 +12,127 @@
 
 # LNK Reader 🖥️
 
-This program is made to **read and open Windows `.lnk` shortcut files on Linux/macOS**.
-The first version was a quick regex hack I made for practice, but since then I’ve reworked it to follow the official Microsoft SHLLINK spec for proper parsing.
+`open_lnk` is a small CLI tool that reads Windows `.lnk` (Shell Link) shortcut files on Linux/macOS, resolves the target to a local path or a network URI, and opens it with your desktop default handler.
 
-That means it now supports:
+At a high level it:
 
-* LocalBasePath, RelativePath, WorkingDir, Arguments, IconLocation (ANSI/Unicode)
-* Windows drive → Linux mount mapping
-* Proper handling of spaces, multiple spaces, and encoding quirks
-
-It won’t cover 100% of exotic edge cases (e.g. weird *ExtraData blocks*, UNC network shares, or rare Unicode surrogate pairs), but it should handle **almost all `.lnk` files without bugs**.
+1. Parses the `.lnk` binary format (subset of the Microsoft Shell Link specification).
+2. Builds the best target path it can from the available fields.
+3. Resolves Windows-style paths to Linux/macOS locations (mapping file, mounts, GVFS, etc.).
+4. Opens the final path/URI using `xdg-open` (Linux) or `open` (macOS).
 
 [Demo video](https://github.com/SECRET-GUEST/windows_link_reader/assets/92639080/f92222d6-e028-4166-8e6d-a9c7bd40f144)
-
-> ⚡ Note: The video looks slow because I left time for you to read — in reality it opens links almost instantly, even faster than Windows.
-
----
-
-## 📋 Table of Contents
-
-1. [Features](#-features)
-2. [Prerequisites](#-prerequisites)
-3. [Installation](#-installation)
-4. [Usage](#-usage)
-5. [Uninstallation](#-uninstallation)
-6. [License](#-license)
-7. [Support](#-support)
 
 ---
 
 ## 🌟 Features
 
-* ✅ Full spec parsing (no more fragile regex)
-* ✅ Path normalization (`\` → `/`)
-* ✅ Mount detection (map Windows drives on Linux)
-* ✅ Multi-backend notifications:
-
-  * Linux: `notify-send`, `zenity`, `kdialog`, `xmessage`
-  * macOS: `osascript`
-  * Fallback: stderr
- 
-* ✅ Opens with system default program (or parent dir if target missing)
-* ✅ Installer/uninstaller scripts
+- Parses common Shell Link fields (ANSI + Unicode):
+  - `LocalBasePath`, `CommonPathSuffix`, `RelativePath`, `WorkingDir`, `Arguments`, `IconLocation`
+- UTF-16LE to UTF-8 conversion (including surrogate pairs)
+- Windows path normalization (`\` -> `/`) for Unix filesystem checks
+- Drive-letter resolution:
+  - User mapping file (recommended)
+  - Automatic `/proc/mounts` probing (Linux)
+  - Optional interactive prompt fallback (terminal only)
+- UNC resolution:
+  - User mapping file (recommended)
+  - GVFS mounts (GNOME)
+  - CIFS mounts (`/proc/mounts`)
+  - SMB URI fallback (`smb://...`) if no local mount is found
+- Error reporting:
+  - Best-effort desktop notifications (Linux/macOS)
+  - Always prints a clear error to stderr
+- Installer/uninstaller scripts for convenience (`setup.sh`, `uninstall.sh`)
 
 ---
 
 ## 🔍 Prerequisites
 
-* GCC (or Clang) to compile
-* Linux or macOS
-* On Linux:
+- A C compiler: `gcc` or `clang`
 
-  * `libnotify-bin` (for notifications)
-  * `xdg-utils` (for opening files)
+Runtime:
+
+- Linux: `xdg-open` (usually from `xdg-utils`)
+- macOS: `open` is built-in
+
+Optional (nice-to-have) for notifications on Linux:
+
+- `notify-send` (usually `libnotify-bin`)
+- `zenity` or `kdialog`
 
 ---
 
 ## 📥 Installation
 
 ```bash
-git clone https://github.com/SECRET-GUEST/windows_link_reader.git
-cd windows_link_reader
 chmod +x setup.sh
 ./setup.sh
 ```
 
-This will:
+What `setup.sh` does:
 
-* Compile `lnkreader.c` into `open_lnk`
-* Install required deps (if missing)
-* Create a `.desktop` file and register `.lnk` MIME type
+- Compiles `open_lnk` from the sources under `src/` (includes from `include/`)
+- Installs the binary:
+  - Tries `/usr/local/bin/open_lnk` (via `sudo`)
+  - Falls back to `~/.local/bin/open_lnk`
+- On Linux: creates a desktop entry (`open_lnk.desktop`) and tries to register a default handler for `.lnk`
+- On Debian/Ubuntu systems: may try to install optional packages via `apt-get` (network required)
 
-Now you can **double-click `.lnk` files** and they’ll open directly.
+From a terminal:
+
+```bash
+open_lnk /path/to/file.lnk
+```
+
+After installation on Linux, you can also double-click `.lnk` files (depending on your desktop environment and MIME database state).
 
 ---
 
-## ▶️ Usage
+## ▶️ Configuration (Drive/UNC mappings)
 
-From terminal:
+### Mapping file location
 
-```bash
-./open_lnk path/to/file.lnk
+The tool loads mappings from:
+
+1. `$WINDOWS_LINK_READER_MAP` (if set), otherwise
+2. `$XDG_CONFIG_HOME/windows-link-reader/mappings.conf` (if `XDG_CONFIG_HOME` is set), otherwise
+3. `~/.config/windows-link-reader/mappings.conf`
+
+### Mapping file format
+
+One rule per line:
+
+```ini
+# Drive letter mapping:
+F:=/media/me/F_Daten
+
+# UNC mapping:
+//server/share=/mnt/share
+\\server\\share=/mnt/share
 ```
 
-Or just double-click a `.lnk` file once installed.
+Notes:
+
+- Empty lines and lines starting with `#` are ignored.
+- Prefixes that are considered dangerous are ignored (examples: `/`, `/proc`, `/sys`, `/dev`, ...).
+
+---
+
+### How resolution works (quick overview)
+
+#### UNC paths (`//server/share/...`)
+
+1. Mappings table (`mappings.conf`)
+2. GVFS mount lookup (GNOME)
+3. CIFS mount lookup (`/proc/mounts`)
+4. Fallback: build an encoded `smb://...` URI and ask the desktop to open it
+
+#### Drive paths (`X:/...`)
+
+1. Mappings table (`mappings.conf`)
+2. `/proc/mounts` scoring (best-effort guess)
+3. Optional interactive prompt (terminal only) to learn the mount prefix
 
 ---
 
@@ -106,7 +143,41 @@ chmod +x uninstall.sh
 ./uninstall.sh
 ```
 
-This will remove the binary and `.desktop` entry.
+What `uninstall.sh` removes (best-effort):
+
+- The installed binary:
+  - `/usr/local/bin/open_lnk` (via `sudo`, if available)
+  - `~/.local/bin/open_lnk`
+- Desktop entry:
+  - `/usr/share/applications/open_lnk.desktop` (via `sudo`, if available)
+  - `~/.local/share/applications/open_lnk.desktop`
+- Attempts to refresh desktop/mime databases if the tools exist
+
+---
+
+## 🌴 Tree
+
+This version is split into small modules:
+
+- Entry point: `src/main.c`
+- Public headers: `include/open_lnk/`
+- LNK parsing and target building: `src/lnk/`
+- Path resolution (mappings/mounts/GVFS/UNC helpers): `src/resolve/`
+- Platform integration (open + error notifications): `src/platform/`
+- Generic helpers: `src/util/`
+
+The old single-file source name (`lnkReader.c`) is kept as a short "pointer" file for legacy reference.
+
+---
+
+## ⛔ Limitations
+
+- This is not a full implementation of every possible Shell Link feature (for example, many ExtraData blocks are ignored).
+- Opening is best-effort:
+  - `open_with_desktop()` launches the system opener but does not wait for it.
+  - A desktop environment may behave differently depending on configuration.
+- Some paths may not be resolvable without a correct mapping file or an existing mount.
+
 
 ---
 
@@ -118,7 +189,7 @@ Released under [MIT License](LICENSE).
 
 ## ❓ Support
 
-Open an [issue](https://github.com/SECRET-GUEST/windows_link_reader/issues) or reach me on Twitter.
+Open an [issue](https://github.com/SECRET-GUEST/windows_link_reader/issues) .
 
 
 ```
@@ -131,3 +202,4 @@ Open an [issue](https://github.com/SECRET-GUEST/windows_link_reader/issues) or r
          /   \                     /   \             /   \               /   \      /   \          /   \         /   \ /`\_`>  <_/ \  /    \      /   \          /   \               /   \      /   \     \__         \
 ________/_ __ \___________________/_ __ \___________/_ __ \______ __ ___/_ __ \____/_ __ \________/_ __ \_______/_ __ \\__/'---'\__/_/_  __ \____/_ __ \________/_ __ \_____ _______/_ __ \____/_ __ \____ __\___      )
 ```
+
