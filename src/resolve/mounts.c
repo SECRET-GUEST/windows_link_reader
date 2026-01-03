@@ -1,212 +1,180 @@
-/* (fichier complet inchangé sauf la partie try_map_drive_to_mounts_scored)
- * Je te colle le fichier entier pour être safe.
- */
-
 #include "open_lnk/mounts.h"
-
 #include "open_lnk/fs.h"
 #include "open_lnk/unc.h"
-#include "open_lnk/compat.h"
+
 #include <ctype.h>
 #include <limits.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <unistd.h>
 
-static void unescape_fstab_field(char *s) {
-    if (!s) return;
-    char *r = s, *w = s;
-    while (*r) {
-        if (*r == '\\' &&
-            isdigit((unsigned char)r[1]) &&
-            isdigit((unsigned char)r[2]) &&
-            isdigit((unsigned char)r[3])) {
-            int v = (r[1]-'0')*64 + (r[2]-'0')*8 + (r[3]-'0');
-            *w++ = (char)v;
-            r += 4;
-        } else {
-            *w++ = *r++;
-        }
-    }
-    *w = 0;
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+
+#ifdef __linux__
+static int score_mountpoint_prefix(const char *mnt) {
+    if (!mnt || !*mnt) return 0;
+
+    int s = 0;
+
+    if (strncmp(mnt, "/mnt/", 5) == 0) s += 25;
+    else if (strncmp(mnt, "/media/", 7) == 0) s += 22;
+    else if (strncmp(mnt, "/run/media/", 11) == 0) s += 18;
+    else if (strncmp(mnt, "/run/user/", 10) == 0) s += 12;
+
+    size_t len = strlen(mnt);
+    if (len > 0) s += (int)(len / 8);
+    if (s < 0) s = 0;
+    return s;
 }
 
-static int mounts_line_tokens(const char *line,
-                              char *dev, size_t devsz,
-                              char *mnt, size_t mntsz,
-                              char *fst, size_t fstsz) {
-    if (!line || !dev || !mnt || !fst) return 0;
-
-    const char *p = line;
-    while (*p && isspace((unsigned char)*p)) p++;
-
-    const char *t1 = p;
-    while (*p && !isspace((unsigned char)*p)) p++;
-    size_t n1 = (size_t)(p - t1);
-    while (*p && isspace((unsigned char)*p)) p++;
-
-    const char *t2 = p;
-    while (*p && !isspace((unsigned char)*p)) p++;
-    size_t n2 = (size_t)(p - t2);
-    while (*p && isspace((unsigned char)*p)) p++;
-
-    const char *t3 = p;
-    while (*p && !isspace((unsigned char)*p) && *p != '\n') p++;
-    size_t n3 = (size_t)(p - t3);
-
-    if (n1 == 0 || n2 == 0 || n3 == 0) return 0;
-    if (n1 >= devsz || n2 >= mntsz || n3 >= fstsz) return 0;
-
-    memcpy(dev, t1, n1); dev[n1] = 0;
-    memcpy(mnt, t2, n2); mnt[n2] = 0;
-    memcpy(fst, t3, n3); fst[n3] = 0;
-
-    unescape_fstab_field(dev);
-    unescape_fstab_field(mnt);
-    unescape_fstab_field(fst);
-    return 1;
-}
-
-static int score_mountpoint_prefix(const char *mnt, uid_t uid) {
-    if (!mnt) return 0;
-
-    const char *home = getenv("HOME");
-    if (!home || !*home) {
-        struct passwd *pw = getpwuid(uid);
-        if (pw && pw->pw_dir) home = pw->pw_dir;
-    }
-
-    char user[128] = {0};
-    struct passwd *pw = getpwuid(uid);
-    if (pw && pw->pw_name) snprintf(user, sizeof(user), "%s", pw->pw_name);
-
-    int score = 0;
-
-    if (strncmp(mnt, "/run/media/", 11) == 0) score += 50;
-    if (strncmp(mnt, "/media/", 7) == 0) score += 40;
-    if (strncmp(mnt, "/mnt/", 5) == 0) score += 25;
-
-    if (user[0]) {
-        char p1[PATH_MAX];
-        snprintf(p1, sizeof(p1), "/run/media/%s/", user);
-        if (strncmp(mnt, p1, strlen(p1)) == 0) score += 25;
-
-        char p2[PATH_MAX];
-        snprintf(p2, sizeof(p2), "/media/%s/", user);
-        if (strncmp(mnt, p2, strlen(p2)) == 0) score += 20;
-    }
-
-    if (home && *home) {
-        size_t hn = strlen(home);
-        if (strncmp(mnt, home, hn) == 0 && (mnt[hn] == 0 || mnt[hn] == '/')) score += 10;
-    }
-
-    return score;
-}
-
-static int score_fstype(const char *fst) {
-    if (!fst) return 0;
-    if (strcmp(fst, "cifs") == 0 || strcmp(fst, "smb3") == 0) return 35;
-    if (strcmp(fst, "ntfs") == 0 || strcmp(fst, "ntfs3") == 0) return 30;
-    if (strcmp(fst, "exfat") == 0) return 28;
-    if (strcmp(fst, "vfat") == 0 || strcmp(fst, "msdos") == 0) return 22;
+static int is_probably_system_mount(const char *mnt) {
+    if (!mnt || !*mnt) return 1;
+    if (strcmp(mnt, "/") == 0) return 1;
+    if (strncmp(mnt, "/proc", 5) == 0) return 1;
+    if (strncmp(mnt, "/sys", 4) == 0) return 1;
+    if (strncmp(mnt, "/dev", 4) == 0) return 1;
+    if (strncmp(mnt, "/run", 4) == 0) return 0; /* /run/user can be legit */
     return 0;
 }
 
-char *try_map_drive_to_mounts_scored(const char *winPath) {
-    if (!winPath || strlen(winPath) < 3) return NULL;
-    if (winPath[1] != ':' || winPath[2] != '/') return NULL;
+char* try_map_drive_to_mounts_scored(const char *drive_path) {
+    if (!drive_path || strlen(drive_path) < 3) return NULL;
 
-    FILE *m = fopen("/proc/mounts", "r");
-    if (!m) return NULL;
-
-    /* DO NOT skip /run entirely: /run/media/... is a very common desktop mountpoint. */
-    const char *skip[] = { "/proc", "/sys", "/dev", "/run/user", "/snap", "/var/lib/snapd", NULL };
-    const char *core = winPath + 2;
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f) return NULL;
 
     char bestPath[PATH_MAX];
+    char secondPath[PATH_MAX];
     bestPath[0] = 0;
+    secondPath[0] = 0;
     int bestScore = -1;
-    int secondBestScore = -1;
+    int secondScore = -1;
 
-    uid_t uid = getuid();
-    char line[4096];
-
-    while (fgets(line, sizeof(line), m)) {
-        char dev[1024], mnt[1024], fst[128];
-        if (!mounts_line_tokens(line, dev, sizeof(dev), mnt, sizeof(mnt), fst, sizeof(fst))) continue;
-
-        int bad = 0;
-        for (int i = 0; skip[i]; ++i) {
-            size_t n = strlen(skip[i]);
-            if (strncmp(mnt, skip[i], n) == 0) { bad = 1; break; }
-        }
-        if (bad) continue;
+    char dev[256], mnt[PATH_MAX], fstype[64];
+    while (fscanf(f, "%255s %4095s %63s %*s %*d %*d\n", dev, mnt, fstype) == 3) {
+        if (is_probably_system_mount(mnt)) continue;
 
         char candidate[PATH_MAX];
-        snprintf(candidate, sizeof(candidate), "%s%s", mnt, core);
+        snprintf(candidate, sizeof(candidate), "%s%s", mnt, drive_path + 2);
         if (!path_exists(candidate)) continue;
 
-        int score = 0;
-        score += score_fstype(fst);
-        score += score_mountpoint_prefix(mnt, uid);
-        score += (int)(strlen(mnt) / 8);
+        int score = score_mountpoint_prefix(mnt);
 
         if (score > bestScore) {
-            secondBestScore = bestScore;
+            secondScore = bestScore;
+            snprintf(secondPath, sizeof(secondPath), "%s", bestPath);
+
             bestScore = score;
             snprintf(bestPath, sizeof(bestPath), "%s", candidate);
-        } else if (score > secondBestScore) {
-            secondBestScore = score;
+        } else if (score > secondScore) {
+            secondScore = score;
+            snprintf(secondPath, sizeof(secondPath), "%s", candidate);
         }
     }
 
-    fclose(m);
+    fclose(f);
 
-    /* Confidence gate: avoid “matched by chance”. */
-    if (bestScore < 30) return NULL;
-    if (secondBestScore >= bestScore - 3) return NULL;
+    if (bestScore < 0 || bestPath[0] == 0) return NULL;
 
-    if (bestScore >= 0 && bestPath[0]) return strdup(bestPath);
+    /* Ambiguïté: si 2 candidats “réels” ont un score quasi identique, on évite la fausse bonne réponse */
+    if (secondScore >= 0 && (bestScore - secondScore) < 2) {
+        return NULL;
+    }
+
+    return strdup(bestPath);
+}
+#else
+char* try_map_drive_to_mounts_scored(const char *drive_path) {
+    (void)drive_path;
     return NULL;
 }
+#endif
 
-/* UNC part unchanged */
+
+#ifdef __linux__
+
+#include <strings.h> /* strcasecmp */
+
+/*
+ * Try to resolve a UNC path using CIFS mounts listed in /proc/mounts.
+ *
+ * Input:
+ *   uncPath like "//server/share/optional/rest"
+ *
+ * Output:
+ *   Newly allocated local path if found, otherwise NULL.
+ */
 char *try_map_unc_to_cifs_mounts(const char *uncPath) {
-    if (!uncPath || strncmp(uncPath, "//", 2) != 0) return NULL;
+    if (!uncPath || !*uncPath) return NULL;
+
+    char *canon = normalize_unc(uncPath);
+    if (!canon) return NULL;
 
     char server[256], share[256];
     const char *rest = NULL;
-    if (!parse_unc_share(uncPath, server, sizeof(server), share, sizeof(share), &rest)) return NULL;
 
-    FILE *m = fopen("/proc/mounts", "r");
-    if (!m) return NULL;
-
-    char want[PATH_MAX];
-    snprintf(want, sizeof(want), "//%s/%s", server, share);
-
-    char line[4096];
-    while (fgets(line, sizeof(line), m)) {
-        char dev[1024], mnt[1024], fst[128];
-        if (!mounts_line_tokens(line, dev, sizeof(dev), mnt, sizeof(mnt), fst, sizeof(fst))) continue;
-
-        if (strcmp(fst, "cifs") != 0 && strcmp(fst, "smb3") != 0) continue;
-
-        char *dev_norm = normalize_unc(dev);
-        if (!dev_norm) continue;
-
-        int match = (strcmp(dev_norm, want) == 0);
-        free(dev_norm);
-        if (!match) continue;
-
-        char candidate[PATH_MAX];
-        snprintf(candidate, sizeof(candidate), "%s%s", mnt, rest ? rest : "");
-        if (path_exists(candidate)) { fclose(m); return strdup(candidate); }
+    if (!parse_unc_share(canon, server, sizeof(server), share, sizeof(share), &rest)) {
+        free(canon);
+        return NULL;
     }
 
-    fclose(m);
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f) { free(canon); return NULL; }
+
+    char dev[256], mnt[PATH_MAX], fstype[64];
+
+    while (fscanf(f, "%255s %4095s %63s %*s %*d %*d\n", dev, mnt, fstype) == 3) {
+        /* We only care about CIFS/SMB mounts */
+        if (strcmp(fstype, "cifs") != 0 && strcmp(fstype, "smbfs") != 0)
+            continue;
+
+        /*
+         * dev is often like:
+         *   "//server/share"
+         * Normalize it and compare server/share.
+         */
+        char *devcanon = normalize_unc(dev);
+        if (!devcanon) continue;
+
+        char dserv[256], dshare[256];
+        const char *drest = NULL;
+
+        int ok = parse_unc_share(devcanon, dserv, sizeof(dserv), dshare, sizeof(dshare), &drest);
+        free(devcanon);
+
+        if (!ok) continue;
+
+        if (strcasecmp(dserv, server) != 0) continue;
+        if (strcasecmp(dshare, share) != 0) continue;
+
+        /* Build local candidate: mountpoint + rest */
+        char candidate[PATH_MAX];
+        if (rest && *rest) snprintf(candidate, sizeof(candidate), "%s%s", mnt, rest);
+        else snprintf(candidate, sizeof(candidate), "%s", mnt);
+
+        if (path_exists(candidate)) {
+            fclose(f);
+            free(canon);
+            return strdup(candidate);
+        }
+
+        /*
+         * Sometimes the exact file doesn't exist yet (or is a dir),
+         * but the mount itself is valid.
+         */
+        if (path_exists(mnt)) {
+            fclose(f);
+            free(canon);
+            return strdup(mnt);
+        }
+    }
+
+    fclose(f);
+    free(canon);
     return NULL;
 }
+
+#endif /* __linux__ */
