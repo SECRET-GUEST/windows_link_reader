@@ -72,6 +72,17 @@ int append_drive_map_file(const char *path, char drive, const char *prefix);
 char *prompt_for_prefix_drive(char drive);
 
 /*
+ * Like prompt_for_prefix_drive(), but also supports GUI usage:
+ * - If stdin is a TTY: prompts in the terminal.
+ * - Otherwise (Linux): tries zenity/kdialog input boxes.
+ *
+ * Return:
+ *   - newly allocated string (caller must free()) on success
+ *   - NULL if the user skipped/cancelled, input was invalid, or no UI was available
+ */
+char *prompt_for_prefix_drive_any(char drive);
+
+/*
  * Resolve a Windows path/UNC through the mapping table.
  *
  * These functions only return a path if it exists on disk (stat() succeeds),

@@ -1,24 +1,3 @@
-/*
- * open_lnk - Windows .lnk reader / opener
- *
- * High-level flow (what this program does):
- *  1) Parse the .lnk file and extract the fields we care about (LnkInfo).
- *  2) Build the most useful "target" string we can (still in Windows syntax).
- *  3) Convert backslashes to slashes so Unix APIs can reason about the path.
- *     (This makes `stat()` and our heuristics work on Linux/macOS.)
- *  4) Resolve Windows-style locations to a real local path or a URI:
- *       - If the target already exists locally -> open it immediately.
- *       - UNC paths ("//server/share/..."):
- *           mapping table -> GVFS -> CIFS mounts -> encoded smb:// fallback
- *       - Drive paths ("X:/..."):
- *           mapping table -> /proc/mounts scoring -> interactive prompt
- *  5) Open the final path/URI with the system default handler (xdg-open/open).
- *
- * Memory/ownership:
- *   Most helper functions return heap-allocated strings. This file is careful
- *   to free everything before exiting, no matter which branch we take.
- */
-
 #include "open_lnk/desktop.h"
 #include "open_lnk/error.h"
 #include "open_lnk/fs.h"
@@ -30,8 +9,10 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 typedef enum {
     RESOLVE_RAW = 0,
@@ -42,6 +23,20 @@ typedef enum {
     RESOLVE_MOUNTS = 5,
     RESOLVE_URI = 6
 } ResolveKind;
+
+static int g_debug = 0;
+static int g_assist = 0;
+
+static void dbg(const char *stage, const char *win_raw, const char *linux_candidate) {
+    if (!g_debug) return;
+    fprintf(stderr, "[open_lnk] %s\n", stage ? stage : "debug");
+    fprintf(stderr, "  windows: %s\n", win_raw ? win_raw : "(null)");
+    fprintf(stderr, "  linux  : %s\n", linux_candidate ? linux_candidate : "(null)");
+}
+
+static void usage(void) {
+    showError("Usage: open_lnk [--debug] [--assist] <file.lnk>");
+}
 
 static int looks_like_drive_path(const char *p) {
     return p && strlen(p) >= 3 &&
@@ -55,9 +50,20 @@ static int looks_like_unc_path(const char *p) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) { showError("Usage: open_lnk <file.lnk>"); return 1; }
+    const char *envd = getenv("WINDOWS_LINK_READER_DEBUG");
+    if (envd && *envd && strcmp(envd, "0") != 0) g_debug = 1;
+    const char *enva = getenv("WINDOWS_LINK_READER_ASSIST");
+    if (enva && *enva && strcmp(enva, "0") != 0) g_assist = 1;
 
-    FILE *f = fopen(argv[1], "rb");
+    const char *lnk_path = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0) { g_debug = 1; continue; }
+        if (strcmp(argv[i], "--assist") == 0) { g_assist = 1; continue; }
+        if (!lnk_path) lnk_path = argv[i];
+    }
+    if (!lnk_path) { usage(); return 1; }
+
+    FILE *f = fopen(lnk_path, "rb");
     if (!f) { showError("Cannot open .lnk file"); return 1; }
 
     LnkInfo info;
@@ -67,50 +73,48 @@ int main(int argc, char *argv[]) {
     char *target = build_best_target(&info);
     if (!target) { freeLnkInfo(&info); showError("No target path found"); return 1; }
 
-    /*
-     * The .lnk format uses Windows paths, but we are running on Unix.
-     * We convert '\' -> '/' so that:
-     *   - `path_exists()` can test local files correctly
-     *   - our "looks_like_drive_path/unc" checks see "X:/..." and "//server/..."
-     */
+    char *win_raw = strdup(target);
+    dbg("parsed", win_raw, NULL);
+
     normalize_backslashes(target);
+    dbg("normalized", win_raw, target);
 
     ResolveKind rk = RESOLVE_RAW;
     if (path_exists(target)) rk = RESOLVE_LOCAL;
 
-    /*
-     * Load mapping rules (optional).
-     * - If the file does not exist, that's fine; we just keep an empty MapList.
-     * - You can override the mapping path with $WINDOWS_LINK_READER_MAP.
-     */
     MapList maps = {0};
     char *mapPath = NULL;
+
     const char *envp = getenv("WINDOWS_LINK_READER_MAP");
     if (envp && *envp) mapPath = strdup(envp);
     else mapPath = default_map_path();
-    if (mapPath) load_map_file(mapPath, &maps);
+
+    if (mapPath) {
+        if (g_assist) {
+            /* Ensure the mapping file exists so users can find/edit it. */
+            FILE *mf = fopen(mapPath, "a");
+            if (mf) fclose(mf);
+        }
+        load_map_file(mapPath, &maps);
+    }
 
     char *resolved = NULL;
     char *uri_fallback = NULL;
 
-    /*
-     * UNC resolution layers (in order):
-     *   1) mappings.conf (manual mappings)
-     *   2) GVFS (common in GNOME desktops)
-     *   3) /proc/mounts CIFS mount (system-level mount)
-     *   4) smb:// URI fallback (so the desktop can still open a share)
-     */
     if (!path_exists(target) && looks_like_unc_path(target)) {
         resolved = try_map_unc_with_table(target, &maps);
+        dbg("unc:table", win_raw, resolved ? resolved : target);
         if (resolved) { free(target); target = resolved; rk = RESOLVE_TABLE; resolved = NULL; }
 
         if (!path_exists(target) && rk == RESOLVE_RAW) {
             resolved = try_map_unc_via_gvfs(target);
+            dbg("unc:gvfs", win_raw, resolved ? resolved : target);
             if (resolved) { free(target); target = resolved; rk = RESOLVE_GVFS; resolved = NULL; }
         }
 
         if (!path_exists(target) && rk == RESOLVE_RAW) {
             resolved = try_map_unc_to_cifs_mounts(target);
+            dbg("unc:cifs", win_raw, resolved ? resolved : target);
             if (resolved) { free(target); target = resolved; rk = RESOLVE_CIFS; resolved = NULL; }
         }
 
@@ -119,34 +123,24 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /*
-     * Drive-letter resolution layers (in order):
-     *   1) mappings.conf (manual mappings)
-     *   2) /proc/mounts scoring (automatic best guess)
-     *   3) interactive prompt (ask the user to type the mount prefix)
-     */
     if (!path_exists(target) && looks_like_drive_path(target)) {
         resolved = try_map_drive_with_table(target, &maps);
+        dbg("drive:table", win_raw, resolved ? resolved : target);
         if (resolved) { free(target); target = resolved; rk = RESOLVE_TABLE; resolved = NULL; }
 
         if (!path_exists(target) && rk == RESOLVE_RAW) {
             resolved = try_map_drive_to_mounts_scored(target);
+            dbg("drive:mounts", win_raw, resolved ? resolved : target);
             if (resolved) { free(target); target = resolved; rk = RESOLVE_MOUNTS; resolved = NULL; }
         }
 
         if (!path_exists(target) && rk == RESOLVE_RAW) {
             char drive = (char)toupper((unsigned char)target[0]);
-            char *pfx = prompt_for_prefix_drive(drive);
+            char *pfx = prompt_for_prefix_drive_any(drive);
             if (pfx) {
                 char cand[PATH_MAX];
-                /*
-                 * `target` looks like "X:/something".
-                 * - `target + 2` points to the substring starting at "/something"
-                 * - the user provided a Linux prefix like "/media/me/X_Drive"
-                 * Result is a Linux candidate like:
-                 *   "/media/me/X_Drive" + "/something"
-                 */
                 snprintf(cand, sizeof(cand), "%s%s", pfx, target + 2);
+                dbg("drive:prompt", win_raw, cand);
                 if (path_exists(cand)) {
                     free(target);
                     target = strdup(cand);
@@ -161,24 +155,17 @@ int main(int argc, char *argv[]) {
     int rc = 0;
 
     if (path_exists(target)) {
-        /* The path exists locally: ask the desktop to open it. */
+        dbg("open:path", win_raw, target);
         rc = open_with_desktop(target);
     } else {
         if (uri_fallback && *uri_fallback) {
-            /* Local path not found, but we do have a smb:// fallback. */
+            dbg("open:uri", win_raw, uri_fallback);
             rc = open_with_desktop(uri_fallback);
             if (rc == 0) rk = RESOLVE_URI;
         } else {
             rc = -1;
         }
 
-        /*
-         * Optional fallback: open the parent folder.
-         *
-         * We only do this when `rk != RESOLVE_RAW` because:
-         *   - RESOLVE_RAW means `target` is still a Windows-ish path like "X:/..."
-         *     which is not a meaningful Linux directory to open.
-         */
         if (rc != 0 && rk != RESOLVE_RAW) {
             char *dup = strdup(target);
             if (dup) {
@@ -198,8 +185,19 @@ int main(int argc, char *argv[]) {
         else snprintf(buf, sizeof(buf), "Failed to open: %s", target);
         showError(buf);
 
+        if (g_assist && mapPath) {
+            (void)open_with_desktop(mapPath);
+        }
+        if (g_debug || g_assist) {
+            fprintf(stderr, "[open_lnk] final\n  windows: %s\n  linux  : %s\n",
+                    win_raw ? win_raw : "(null)",
+                    target ? target : "(null)");
+            if (uri_fallback && *uri_fallback) fprintf(stderr, "  uri    : %s\n", uri_fallback);
+        }
+
         free(uri_fallback);
         free(target);
+        free(win_raw);
         freeLnkInfo(&info);
         ml_free(&maps);
         free(mapPath);
@@ -208,6 +206,7 @@ int main(int argc, char *argv[]) {
 
     free(uri_fallback);
     free(target);
+    free(win_raw);
     freeLnkInfo(&info);
     ml_free(&maps);
     free(mapPath);

@@ -40,6 +40,10 @@ static int is_prefix_dangerous(const char *pfx) {
      */
     if (!pfx || !*pfx) return 1;
     if (strcmp(pfx, "/") == 0) return 1;
+
+    /* Allow common desktop removable mounts under /run/media/... */
+    if (strncmp(pfx, "/run/media/", 11) == 0) return 0;
+
     const char *bad[] = { "/proc", "/sys", "/dev", "/run", "/snap", "/var/lib/snapd", NULL };
     for (int i = 0; bad[i]; i++) {
         size_t n = strlen(bad[i]);
@@ -225,7 +229,7 @@ char *prompt_for_prefix_drive(char drive) {
     if (!is_tty_stdin()) return NULL;
 
     fprintf(stderr,
-            "No mapping found for %c:. Enter Linux mount prefix (example: /media/user/F_Daten) or empty to skip:\n> ",
+            "No mapping found for %c:. Enter Linux mount prefix (example: /run/media/$USER/DRIVE) or empty to skip:\n> ",
             (char)toupper((unsigned char)drive));
     fflush(stderr);
 
@@ -238,4 +242,55 @@ char *prompt_for_prefix_drive(char drive) {
     if (is_prefix_dangerous(s)) return NULL;
 
     return strdup(s);
+}
+
+/* Read a single line from a command (stdout). Returns heap string or NULL. */
+static char *read_cmd_stdout_line(const char *cmd) {
+    if (!cmd || !*cmd) return NULL;
+    FILE *p = popen(cmd, "r");
+    if (!p) return NULL;
+    char buf[PATH_MAX];
+    if (!fgets(buf, sizeof(buf), p)) { pclose(p); return NULL; }
+    pclose(p);
+    char *s = str_trim(buf);
+    if (!*s) return NULL;
+    return strdup(s);
+}
+
+static char *prompt_gui_zenity(char drive) {
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "zenity --entry --title=\"LNK Reader\" "
+             "--text=\"No mapping found for %c:. Enter Linux mount prefix (example: /run/media/$USER/DRIVE)\\n(leave empty to skip)\" ",
+             (char)toupper((unsigned char)drive));
+    return read_cmd_stdout_line(cmd);
+}
+
+static char *prompt_gui_kdialog(char drive) {
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+             "kdialog --inputbox \"No mapping found for %c:. Enter Linux mount prefix (example: /run/media/$USER/DRIVE)\\n(leave empty to skip)\" \"\"",
+             (char)toupper((unsigned char)drive));
+    return read_cmd_stdout_line(cmd);
+}
+
+char *prompt_for_prefix_drive_any(char drive) {
+    /* Prefer terminal prompt when available. */
+    char *pfx = prompt_for_prefix_drive(drive);
+    if (pfx) return pfx;
+
+    /* No TTY: try GUI prompts (Linux only). */
+    char *s = prompt_gui_zenity(drive);
+    if (!s) s = prompt_gui_kdialog(drive);
+    if (!s) return NULL;
+
+    char *t = str_trim(s);
+    if (!*t) { free(s); return NULL; }
+    if (t[0] != '/') { free(s); return NULL; }
+    if (is_prefix_dangerous(t)) { free(s); return NULL; }
+
+    /* Keep returned string heap-allocated and trimmed. */
+    char *out = strdup(t);
+    free(s);
+    return out;
 }

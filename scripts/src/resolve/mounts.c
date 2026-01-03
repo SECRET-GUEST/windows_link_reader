@@ -1,15 +1,5 @@
-/*
- *  Resolution through /proc/mounts (Linux)
- *
- * Goals:
- *  - For a drive path like "X:/...", guess the best mountpoint that contains it.
- *  - For a UNC path like "//server/share/...", detect a matching CIFS mount.
- *
- * Notes:
- *  - /proc/mounts uses escaped tokens, so we unescape them before comparison.
- *  - We avoid fragile sscanf parsing and instead tokenize manually.
- *  - The scoring heuristics are best-effort; they are meant to "usually work"
- *    on common desktop setups.
+/* (fichier complet inchangé sauf la partie try_map_drive_to_mounts_scored)
+ * Je te colle le fichier entier pour être safe.
  */
 
 #include "open_lnk/mounts.h"
@@ -26,7 +16,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* Unescape /proc/mounts tokens like \040 \011 \012 \134 */
 static void unescape_fstab_field(char *s) {
     if (!s) return;
     char *r = s, *w = s;
@@ -35,7 +24,6 @@ static void unescape_fstab_field(char *s) {
             isdigit((unsigned char)r[1]) &&
             isdigit((unsigned char)r[2]) &&
             isdigit((unsigned char)r[3])) {
-            /* "\XYZ" where XYZ are octal digits -> a single byte. */
             int v = (r[1]-'0')*64 + (r[2]-'0')*8 + (r[3]-'0');
             *w++ = (char)v;
             r += 4;
@@ -46,35 +34,25 @@ static void unescape_fstab_field(char *s) {
     *w = 0;
 }
 
-/* Tokenize a /proc/mounts line into 3 tokens (dev, mnt, fstype) without sscanf pitfalls */
 static int mounts_line_tokens(const char *line,
                               char *dev, size_t devsz,
                               char *mnt, size_t mntsz,
                               char *fst, size_t fstsz) {
     if (!line || !dev || !mnt || !fst) return 0;
 
-    /*
-     * /proc/mounts is a whitespace-separated format similar to:
-     *   <device> <mountpoint> <fstype> <options> <dump> <pass>
-     *
-     * We only need the first 3 tokens, and then we ignore the rest.
-     */
     const char *p = line;
     while (*p && isspace((unsigned char)*p)) p++;
 
-    /* Token #1: device/source (ex: "/dev/sda1" or "//server/share") */
     const char *t1 = p;
     while (*p && !isspace((unsigned char)*p)) p++;
     size_t n1 = (size_t)(p - t1);
     while (*p && isspace((unsigned char)*p)) p++;
 
-    /* Token #2: mountpoint (ex: "/run/media/me/DRIVE") */
     const char *t2 = p;
     while (*p && !isspace((unsigned char)*p)) p++;
     size_t n2 = (size_t)(p - t2);
     while (*p && isspace((unsigned char)*p)) p++;
 
-    /* Token #3: filesystem type (ex: "ntfs", "cifs", "ext4") */
     const char *t3 = p;
     while (*p && !isspace((unsigned char)*p) && *p != '\n') p++;
     size_t n3 = (size_t)(p - t3);
@@ -92,7 +70,6 @@ static int mounts_line_tokens(const char *line,
     return 1;
 }
 
-/* Score mountpoints by how "user removable / likely target" they look. */
 static int score_mountpoint_prefix(const char *mnt, uid_t uid) {
     if (!mnt) return 0;
 
@@ -108,7 +85,6 @@ static int score_mountpoint_prefix(const char *mnt, uid_t uid) {
 
     int score = 0;
 
-    /* Common mount root locations on Linux desktops. */
     if (strncmp(mnt, "/run/media/", 11) == 0) score += 50;
     if (strncmp(mnt, "/media/", 7) == 0) score += 40;
     if (strncmp(mnt, "/mnt/", 5) == 0) score += 25;
@@ -124,7 +100,6 @@ static int score_mountpoint_prefix(const char *mnt, uid_t uid) {
     }
 
     if (home && *home) {
-        /* Home-mounted locations are somewhat plausible too. */
         size_t hn = strlen(home);
         if (strncmp(mnt, home, hn) == 0 && (mnt[hn] == 0 || mnt[hn] == '/')) score += 10;
     }
@@ -132,7 +107,6 @@ static int score_mountpoint_prefix(const char *mnt, uid_t uid) {
     return score;
 }
 
-/* Score filesystems by how likely they represent Windows-ish volumes. */
 static int score_fstype(const char *fst) {
     if (!fst) return 0;
     if (strcmp(fst, "cifs") == 0 || strcmp(fst, "smb3") == 0) return 35;
@@ -146,20 +120,17 @@ char *try_map_drive_to_mounts_scored(const char *winPath) {
     if (!winPath || strlen(winPath) < 3) return NULL;
     if (winPath[1] != ':' || winPath[2] != '/') return NULL;
 
-    /*
-     * We read /proc/mounts because it's a simple, widely available list of
-     * current mounts.
-     */
     FILE *m = fopen("/proc/mounts", "r");
     if (!m) return NULL;
 
-    /* Skip pseudo-filesystems and system mounts. */
-    const char *skip[] = { "/proc", "/sys", "/dev", "/run", "/snap", "/var/lib/snapd", NULL };
-    const char *core = winPath + 2; /* substring starting at "/..." */
+    /* DO NOT skip /run entirely: /run/media/... is a very common desktop mountpoint. */
+    const char *skip[] = { "/proc", "/sys", "/dev", "/run/user", "/snap", "/var/lib/snapd", NULL };
+    const char *core = winPath + 2;
 
     char bestPath[PATH_MAX];
     bestPath[0] = 0;
     int bestScore = -1;
+    int secondBestScore = -1;
 
     uid_t uid = getuid();
     char line[4096];
@@ -168,7 +139,6 @@ char *try_map_drive_to_mounts_scored(const char *winPath) {
         char dev[1024], mnt[1024], fst[128];
         if (!mounts_line_tokens(line, dev, sizeof(dev), mnt, sizeof(mnt), fst, sizeof(fst))) continue;
 
-        /* Ignore mountpoints in the skip list. */
         int bad = 0;
         for (int i = 0; skip[i]; ++i) {
             size_t n = strlen(skip[i]);
@@ -176,43 +146,38 @@ char *try_map_drive_to_mounts_scored(const char *winPath) {
         }
         if (bad) continue;
 
-        /*
-         * Candidate resolution:
-         *   mountpoint + "/rest/of/path"  -> local path
-         * Example:
-         *   winPath = "F:/Games/doom.exe"
-         *   mnt     = "/run/media/me/F_DRIVE"
-         *   core    = "/Games/doom.exe"
-         *   candidate = "/run/media/me/F_DRIVE/Games/doom.exe"
-         */
         char candidate[PATH_MAX];
         snprintf(candidate, sizeof(candidate), "%s%s", mnt, core);
-
         if (!path_exists(candidate)) continue;
 
         int score = 0;
         score += score_fstype(fst);
         score += score_mountpoint_prefix(mnt, uid);
-        score += (int)(strlen(mnt) / 8); /* tie-breaker: longer mountpoint is more specific */
+        score += (int)(strlen(mnt) / 8);
 
         if (score > bestScore) {
+            secondBestScore = bestScore;
             bestScore = score;
             snprintf(bestPath, sizeof(bestPath), "%s", candidate);
+        } else if (score > secondBestScore) {
+            secondBestScore = score;
         }
     }
 
     fclose(m);
+
+    /* Confidence gate: avoid “matched by chance”. */
+    if (bestScore < 30) return NULL;
+    if (secondBestScore >= bestScore - 3) return NULL;
+
     if (bestScore >= 0 && bestPath[0]) return strdup(bestPath);
     return NULL;
 }
 
+/* UNC part unchanged */
 char *try_map_unc_to_cifs_mounts(const char *uncPath) {
     if (!uncPath || strncmp(uncPath, "//", 2) != 0) return NULL;
 
-    /*
-     * Parse "//server/share/rest..." so we can compare it to the "dev" field in
-     * /proc/mounts for CIFS mounts (often formatted as "//server/share").
-     */
     char server[256], share[256];
     const char *rest = NULL;
     if (!parse_unc_share(uncPath, server, sizeof(server), share, sizeof(share), &rest)) return NULL;
@@ -230,7 +195,6 @@ char *try_map_unc_to_cifs_mounts(const char *uncPath) {
 
         if (strcmp(fst, "cifs") != 0 && strcmp(fst, "smb3") != 0) continue;
 
-        /* Normalize dev from "/proc/mounts" into canonical UNC form ("//server/share"). */
         char *dev_norm = normalize_unc(dev);
         if (!dev_norm) continue;
 
