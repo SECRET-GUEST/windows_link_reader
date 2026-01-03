@@ -13,7 +13,9 @@ pause_end() {
   fi
 }
 
-cd "$(dirname "$(realpath "$0")")"
+# Reliable script directory (works even if launched via symlink/other cwd)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "$SCRIPT_DIR"
 
 OS="$(uname -s || echo Unknown)"
 
@@ -64,32 +66,27 @@ if [ "$OS" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
   if ! command -v xdg-open >/dev/null 2>&1; then
     say "[*] Installing xdg-utils..."
     sudo apt-get update -y && sudo apt-get install -y xdg-utils || warn "xdg-utils not installed"
-  else ok "xdg-open available"; fi
+  else
+    ok "xdg-open available"
+  fi
 
   if ! command -v notify-send >/dev/null 2>&1; then
     say "[*] Installing libnotify-bin..."
     sudo apt-get update -y && sudo apt-get install -y libnotify-bin || warn "libnotify-bin not installed"
-  else ok "notify-send available"; fi
+  else
+    ok "notify-send available"
+  fi
 
   if ! command -v zenity >/dev/null 2>&1; then
     warn "zenity not found (assistant UI will not be available). On Ubuntu: sudo apt-get install zenity"
-  else ok "zenity available"; fi
+  else
+    ok "zenity available"
+  fi
 fi
 
 if [ "$OS" = "Linux" ]; then
-  ICON_SRC="assets/icons/open-lnk.svg"
+  ICON_SRC="$SCRIPT_DIR/assets/icons/open-lnk.svg"
   DESKTOP_NAME="open_lnk.desktop"
-
-  DESKTOP_CONTENT="[Desktop Entry]
-Name=Open LNK
-Comment=Open Windows .lnk shortcuts
-Exec=open_lnk %U
-TryExec=open_lnk
-Type=Application
-MimeType=application/x-ms-shortcut;
-Icon=open-lnk
-Terminal=false
-Categories=Utility;FileTools;"
 
   DESK_SYS="/usr/share/applications/$DESKTOP_NAME"
   DESK_USER="$HOME/.local/share/applications/$DESKTOP_NAME"
@@ -99,37 +96,57 @@ Categories=Utility;FileTools;"
 
   say "[*] Installing desktop entry + icon..."
 
-  installed_system=0
+  # We will install either system-wide (if sudo non-interactive works)
+  # or per-user. To make icon resolution 100% reliable, the .desktop uses
+  # an absolute path to the installed SVG (Icon=/path/to/open-lnk.svg).
   if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    if printf '%s' "$DESKTOP_CONTENT" | sudo tee "$DESK_SYS" >/dev/null; then
-      ok "Desktop entry at $DESK_SYS"
-      installed_system=1
-    else
-      warn "System desktop write failed; falling back to user desktop"
-    fi
-
+    # SYSTEM
     if [ -f "$ICON_SRC" ]; then
-      sudo mkdir -p "$(dirname "$ICON_SYS")" || true
-      sudo install -m0644 "$ICON_SRC" "$ICON_SYS" && ok "Icon at $ICON_SYS" || warn "Icon system install failed"
+      sudo install -D -m0644 "$ICON_SRC" "$ICON_SYS"
+      ok "Icon at $ICON_SYS"
     else
       warn "Icon missing: $ICON_SRC"
     fi
-  fi
 
-  if [ "$installed_system" -eq 0 ]; then
-    mkdir -p "$(dirname "$DESK_USER")"
-    printf '%s' "$DESKTOP_CONTENT" > "$DESK_USER"
-    ok "Desktop entry at $DESK_USER"
-
+    sudo install -D -m0644 /dev/stdin "$DESK_SYS" <<EOF
+[Desktop Entry]
+Name=Open LNK
+Comment=Open Windows .lnk shortcuts
+Exec=open_lnk %U
+TryExec=open_lnk
+Type=Application
+MimeType=application/x-ms-shortcut;
+Icon=$ICON_SYS
+Terminal=false
+Categories=Utility;FileTools;
+EOF
+    ok "Desktop entry at $DESK_SYS"
+  else
+    # USER
     if [ -f "$ICON_SRC" ]; then
-      mkdir -p "$(dirname "$ICON_USER")"
-      install -m0644 "$ICON_SRC" "$ICON_USER"
+      install -D -m0644 "$ICON_SRC" "$ICON_USER"
       ok "Icon at $ICON_USER"
     else
       warn "Icon missing: $ICON_SRC"
     fi
+
+    install -D -m0644 /dev/stdin "$DESK_USER" <<EOF
+[Desktop Entry]
+Name=Open LNK
+Comment=Open Windows .lnk shortcuts
+Exec=open_lnk %U
+TryExec=open_lnk
+Type=Application
+MimeType=application/x-ms-shortcut;
+Icon=$ICON_USER
+Terminal=false
+Categories=Utility;FileTools;
+EOF
+    ok "Desktop entry at $DESK_USER"
   fi
 
+  # Best-effort refresh (not strictly required when Icon is absolute path,
+  # but helps MIME handlers & menus update).
   if command -v update-desktop-database >/dev/null 2>&1; then
     sudo update-desktop-database /usr/share/applications 2>/dev/null || true
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
