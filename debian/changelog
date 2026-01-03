@@ -1,0 +1,5 @@
+open-lnk (0.0.6-1) UNRELEASED; urgency=medium
+
+  * Initial release. (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+
+ -- merlin <gawain@unknown>  Sat, 03 Jan 2026 19:07:56 +0100

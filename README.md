@@ -10,259 +10,204 @@
                                                                               
 ```
 
-## 📑 Table of Contents
-
-- [LNK Reader 🖥️](#lnk-reader-️)
-- [Features](#-features)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Configuration (Drive / UNC mappings)](#️-configuration-drive--unc-mappings)
-  - [Mapping file location](#mapping-file-location)
-  - [Mapping file format](#mapping-file-format)
-- [How resolution works](#-how-resolution-works-quick-overview)
-  - [UNC paths](#unc-paths-servershare)
-  - [Drive paths](#drive-paths-x)
-- [Uninstallation](#️-uninstallation)
-- [Project structure](#-tree)
-- [Limitations](#️-limitations)
-- [License](#-license)
-- [Support](#-support)
-
-
 # LNK Reader 🖥️
 
-`open_lnk` is a small CLI tool that reads Windows `.lnk` (Shell Link) shortcut files on Linux/macOS, resolves the target to a local path or a network URI, and opens it with your desktop default handler.
+**open_lnk** is a lightweight desktop utility that opens Windows `.lnk` (Shell Link) shortcut files directly on Linux (and macOS).
 
-At a high level it:
+It is designed first and foremost for **double-click / “Open with” usage**, not for manual command-line interaction.
 
-1. Parses the `.lnk` binary format (subset of the Microsoft Shell Link specification).
-2. Builds the best target path it can from the available fields.
-3. Resolves Windows-style paths to Linux/macOS locations (mapping file, mounts, GVFS, etc.).
-4. Opens the final path/URI using `xdg-open` (Linux) or `open` (macOS).
+The goal is simple:
+👉 *You double-click a `.lnk` file, it opens the correct target — even if it lives on a different drive, partition, or network share.*
+
+---
+
+## 🧠 How it works (high level)
+
+When a `.lnk` file is opened, `open_lnk`:
+
+1. Parses the Windows **Shell Link** binary format (subset of the official Microsoft specification).
+2. Extracts the most reliable target path from the available fields.
+3. Translates Windows paths to Linux/macOS equivalents:
+
+   * Drive letters (`X:\...`)
+   * UNC paths (`\\server\share\...`)
+4. Tries multiple resolution strategies automatically.
+5. Opens the resolved path or network URI using the system default handler.
+
+If the target **cannot be resolved automatically**, a **graphical assistant** is shown to help the user select the correct mount point — and the choice is remembered for next time.
 
 [Demo video](https://github.com/SECRET-GUEST/windows_link_reader/assets/92639080/f92222d6-e028-4166-8e6d-a9c7bd40f144)
 
 ---
 
-## 🌟 Features
+## 🌟 Key Features
 
-- Parses common Shell Link fields (ANSI + Unicode):
-  - `LocalBasePath`, `CommonPathSuffix`, `RelativePath`, `WorkingDir`, `Arguments`, `IconLocation`
-- UTF-16LE to UTF-8 conversion (including surrogate pairs)
-- Windows path normalization (`\` → `/`) for Unix filesystem checks
-- **Debug mode** (`--debug` or `WINDOWS_LINK_READER_DEBUG=1`)
-  - Always shows the parsed Windows target path
-  - Shows the final Linux path or URI candidate
-- **Assistant mode** (`--assist` or `WINDOWS_LINK_READER_ASSIST=1`)
-  - Helps create or fix mappings interactively when resolution fails
-  - Works both in terminal and via GUI dialogs (`zenity` / `kdialog`)
-- Drive-letter resolution:
-  - User mapping file (recommended)
-  - Automatic `/proc/mounts` probing with scoring (Linux)
-  - Optional interactive assistant fallback
-- UNC resolution:
-  - User mapping file (recommended)
-  - GVFS mounts (GNOME)
-  - CIFS mounts (`/proc/mounts`)
-  - SMB URI fallback (`smb://...`, percent-encoded)
-- Safer resolution logic:
-  - Avoids accidental “match by chance”
-  - Rejects ambiguous mount candidates
-- Error reporting:
-  - Best-effort desktop notifications (Linux/macOS)
-  - Always prints a clear error to stderr
-- Installer/uninstaller scripts for convenience (`setup.sh`, `uninstall.sh`)
+### Core features
+
+* Parses common Shell Link fields (ANSI + Unicode):
+
+  * `LocalBasePath`, `CommonPathSuffix`, `RelativePath`
+  * `WorkingDir`, `Arguments`, `IconLocation`
+* Full UTF-16LE → UTF-8 conversion (including surrogate pairs)
+* Windows path normalization (`\` → `/`)
+* Best-effort resolution with safe fallbacks
+* Opens targets via:
+
+  * `xdg-open` (Linux)
+  * `open` (macOS)
+
+---
+
+### Smart path resolution
+
+#### Drive letters (`X:/...`)
+
+Resolution order:
+
+1. **Per-link cache** (exact `.lnk` → mount prefix association)
+2. User mapping file (`mappings.conf`)
+3. Automatic mount probing (`/proc/mounts`, scored)
+4. **Graphical assistant** (if still unresolved)
+
+#### UNC paths (`//server/share/...`)
+
+Resolution order:
+
+1. User mapping file
+2. GVFS mounts (GNOME)
+3. CIFS mounts (`/proc/mounts`)
+4. Fallback to `smb://` URI (percent-encoded)
+
+---
+
+### 🧠 Intelligent per-link cache (important)
+
+When a `.lnk` cannot be resolved automatically:
+
+* A **GUI dialog** lists currently mounted locations.
+* The user selects the correct mount point (or enters one manually).
+* The association is saved **only for this `.lnk` file**.
+
+This means:
+
+* A shortcut pointing to drive **A:** will not interfere with one pointing to **F:**
+* Re-opening the same `.lnk` is instant
+* No global or dangerous assumptions are made
+
+The cache is stored safely and updated atomically (no duplicates, latest-wins).
+
+---
+
+### 🪟 Graphical assistant (no terminal required)
+
+* Automatically shown **only when resolution fails**
+* Implemented via standard desktop dialogs (e.g. `zenity` / compatible tools)
+* Works when launched from:
+
+  * File manager (double-click)
+  * “Open with”
+* No command-line interaction required for normal users
+
+---
+
+### Error handling & diagnostics
+
+* Clear desktop notifications on failure
+* Safe fallbacks (parent directory, URI)
+* Optional debug output (for developers)
 
 ---
 
 ## 🔍 Prerequisites
 
-Build-time:
+### Build-time
 
-- A C compiler: `gcc` or `clang`
+* A C compiler (`gcc` or `clang`)
+* `make`
 
-Runtime:
+### Runtime
 
-- Linux: `xdg-open` (usually from `xdg-utils`)
-- macOS: `open` (built-in)
+* Linux: `xdg-open` (from `xdg-utils`)
+* macOS: `open` (built-in)
 
-Optional (nice-to-have):
+Optional (recommended on Linux):
 
-- Linux notifications: `notify-send`
-- GUI assistant dialogs: `zenity` or `kdialog`
+* `zenity` or compatible dialog tool (for the graphical assistant)
+* `notify-send` (desktop notifications)
 
 ---
 
 ## 📥 Installation
 
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-What `setup.sh` does:
-
-* Compiles `open_lnk` from the sources under `src/` (includes from `include/`)
-* Installs the binary:
-
-  * Tries `/usr/local/bin/open_lnk` (via `sudo`)
-  * Falls back to `~/.local/bin/open_lnk`
-* On Linux:
-
-  * Creates a desktop entry (`open_lnk.desktop`)
-  * Tries to register a default handler for `.lnk`
-* On Debian/Ubuntu systems:
-
-  * May try to install optional packages via `apt-get` (network required)
-
-From a terminal:
+### From source (manual)
 
 ```bash
-open_lnk /path/to/file.lnk
+make
+sudo make install
 ```
 
-Debug / assist modes:
-
-```bash
-open_lnk --debug file.lnk
-open_lnk --assist file.lnk
-```
-
-Or via environment variables:
-
-```bash
-WINDOWS_LINK_READER_DEBUG=1 open_lnk file.lnk
-WINDOWS_LINK_READER_ASSIST=1 open_lnk file.lnk
-```
-
-After installation on Linux, you can also double-click `.lnk` files (depending on your desktop environment and MIME database state).
+(or use `setup.sh` for convenience)
 
 ---
 
-## ▶️ Configuration (Drive / UNC mappings)
+## ▶️ Usage
 
-### Mapping file location
+**Normal usage (recommended):**
 
-The tool loads mappings from:
+* Double-click a `.lnk` file
+* Or right-click → *Open with* → **LNK Reader**
 
-1. `$WINDOWS_LINK_READER_MAP` (if set), otherwise
-2. `$XDG_CONFIG_HOME/windows-link-reader/mappings.conf` (if `XDG_CONFIG_HOME` is set), otherwise
-3. `~/.config/windows-link-reader/mappings.conf`
+Command-line usage exists mainly for debugging and development and is **not required** for normal users.
 
-The file is created automatically when needed (for example in assistant mode).
+---
 
-### Mapping file format
+## ⚙️ Configuration files
 
-One rule per line:
+### Mapping file (optional)
+
+Used for global drive / UNC mappings:
+
+```
+~/.config/windows-link-reader/mappings.conf
+```
+
+Example:
 
 ```ini
-# Drive letter mapping:
+# Drive letter mapping
 F:=/media/me/F_Daten
 
-# UNC mapping:
+# UNC mapping
 //server/share=/mnt/share
-\\server\\share=/mnt/share
 ```
 
-Notes:
+### Per-link cache
 
-* Empty lines and lines starting with `#` are ignored.
-* Prefixes considered dangerous are ignored (examples: `/`, `/proc`, `/sys`, `/dev`, …).
-
----
-
-## 🧭 How resolution works (quick overview)
-
-### UNC paths (`//server/share/...`)
-
-1. Mapping table (`mappings.conf`)
-2. GVFS mount lookup (GNOME)
-3. CIFS mount lookup (`/proc/mounts`)
-4. Fallback: build an encoded `smb://...` URI and ask the desktop to open it
-
-### Drive paths (`X:/...`)
-
-1. Mapping table (`mappings.conf`)
-2. `/proc/mounts` scoring (best-effort guess)
-3. Assistant prompt (terminal or GUI) to learn the correct mount prefix
-
----
-
-## 🗑️ Uninstallation
-
-```bash
-chmod +x uninstall.sh
-./uninstall.sh
-```
-
-What `uninstall.sh` removes (best-effort):
-
-- The installed binary:
-  - `/usr/local/bin/open_lnk` (via `sudo`, if available)
-  - `~/.local/bin/open_lnk`
-- Desktop entry:
-  - `/usr/share/applications/open_lnk.desktop` (via `sudo`, if available)
-  - `~/.local/share/applications/open_lnk.desktop`
-- Attempts to refresh desktop/mime databases if the tools exist
-
----
-
-## 🌴 Tree
-
-This version is split into small modules:
-
-- Entry point: `src/main.c`
-- Public headers: `include/open_lnk/`
-- LNK parsing and target building: `src/lnk/`
-- Path resolution (mappings/mounts/GVFS/UNC helpers): `src/resolve/`
-- Platform integration (open + error notifications): `src/platform/`
-- Generic helpers: `src/util/`
-
-The old single-file source name (`lnkReader.c`) is kept as a short "pointer" file for legacy reference.
+Stored separately and managed automatically.
+No manual editing required.
 
 ---
 
 ## ⛔ Limitations
 
-- This is **not a full implementation** of the Microsoft Shell Link specification.
-  - Many `ExtraData` blocks and advanced Shell features are intentionally ignored.
-
-- Windows **shell-only targets** are out of scope:
-  - Control Panel items
-  - Windows Store apps
-  - Virtual folders (e.g. `::{GUID}`)
-  - These links have no meaningful Linux equivalent.
-
-- Path resolution is **best-effort by design**:
-  - Automatic mount detection relies on heuristics and scoring.
-  - Ambiguous matches are intentionally rejected to avoid opening the wrong location.
-
-- A correct mapping file or an existing mount may be required for:
-  - removable drives
-  - network shares
-  - uncommon filesystem layouts
-
-- `open_lnk` delegates opening to the desktop environment:
-  - `xdg-open` (Linux) or `open` (macOS) is called and not awaited.
-  - Final behavior depends on the user’s desktop configuration.
-
-- GUI interaction (assistant dialogs, notifications) depends on optional tools:
-  - `zenity`, `kdialog`, `notify-send`
-  - If unavailable, the tool falls back silently to non-interactive behavior.
-
-
+* Not a full implementation of every Shell Link feature (some ExtraData blocks are ignored).
+* Resolution is best-effort and depends on available mounts.
+* Network shares may still require user authentication handled by the OS.
 
 ---
 
 ## 📜 License
 
-Released under [MIT License](LICENSE).
+Released under the **MIT License**.
 
 ---
 
 ## ❓ Support
 
-Open an [issue](https://github.com/SECRET-GUEST/windows_link_reader/issues) .
+Please open an issue on GitHub if you encounter a problem or have suggestions:
+[https://github.com/SECRET-GUEST/windows_link_reader/issues](https://github.com/SECRET-GUEST/windows_link_reader/issues)
+
+
 
 
 ```

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256"
+     xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Transparent background -->
+
+  <!-- Left chain -->
+  <path d="M64 96
+           a32 32 0 0 1 32 -32
+           h16
+           a16 16 0 0 1 0 32
+           h-16
+           a16 16 0 0 0 -16 16
+           v32
+           a16 16 0 0 0 16 16
+           h16
+           a16 16 0 0 1 0 32
+           h-16
+           a32 32 0 0 1 -32 -32
+           z"
+        fill="#A6FF00"/>
+
+  <!-- Right chain -->
+  <path d="M192 96
+           a32 32 0 0 0 -32 -32
+           h-16
+           a16 16 0 0 0 0 32
+           h16
+           a16 16 0 0 1 16 16
+           v32
+           a16 16 0 0 1 -16 16
+           h-16
+           a16 16 0 0 0 0 32
+           h16
+           a32 32 0 0 0 32 -32
+           z"
+        fill="#00E5FF"/>
+
+</svg>
+

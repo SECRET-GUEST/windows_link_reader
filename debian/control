@@ -1,0 +1,14 @@
+Source: open-lnk
+Section: utils
+Priority: optional
+Maintainer: Secret Guest <noreply@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), gcc, make
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: open-lnk
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, xdg-utils
+Description: Open Windows .lnk shortcuts on Linux/macOS
+ A small tool that parses Windows .lnk shortcut files, resolves targets to local
+ paths or SMB URIs, and opens them with the system default handler.
