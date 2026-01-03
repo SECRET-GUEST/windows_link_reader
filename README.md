@@ -10,6 +10,25 @@
                                                                               
 ```
 
+## 📑 Table of Contents
+
+- [LNK Reader 🖥️](#lnk-reader-️)
+- [Features](#-features)
+- [Prerequisites](#-prerequisites)
+- [Installation](#-installation)
+- [Configuration (Drive / UNC mappings)](#️-configuration-drive--unc-mappings)
+  - [Mapping file location](#mapping-file-location)
+  - [Mapping file format](#mapping-file-format)
+- [How resolution works](#-how-resolution-works-quick-overview)
+  - [UNC paths](#unc-paths-servershare)
+  - [Drive paths](#drive-paths-x)
+- [Uninstallation](#️-uninstallation)
+- [Project structure](#-tree)
+- [Limitations](#️-limitations)
+- [License](#-license)
+- [Support](#-support)
+
+
 # LNK Reader 🖥️
 
 `open_lnk` is a small CLI tool that reads Windows `.lnk` (Shell Link) shortcut files on Linux/macOS, resolves the target to a local path or a network URI, and opens it with your desktop default handler.
@@ -205,11 +224,32 @@ The old single-file source name (`lnkReader.c`) is kept as a short "pointer" fil
 
 ## ⛔ Limitations
 
-- This is not a full implementation of every possible Shell Link feature (for example, many ExtraData blocks are ignored).
-- Opening is best-effort:
-  - `open_with_desktop()` launches the system opener but does not wait for it.
-  - A desktop environment may behave differently depending on configuration.
-- Some paths may not be resolvable without a correct mapping file or an existing mount.
+- This is **not a full implementation** of the Microsoft Shell Link specification.
+  - Many `ExtraData` blocks and advanced Shell features are intentionally ignored.
+
+- Windows **shell-only targets** are out of scope:
+  - Control Panel items
+  - Windows Store apps
+  - Virtual folders (e.g. `::{GUID}`)
+  - These links have no meaningful Linux equivalent.
+
+- Path resolution is **best-effort by design**:
+  - Automatic mount detection relies on heuristics and scoring.
+  - Ambiguous matches are intentionally rejected to avoid opening the wrong location.
+
+- A correct mapping file or an existing mount may be required for:
+  - removable drives
+  - network shares
+  - uncommon filesystem layouts
+
+- `open_lnk` delegates opening to the desktop environment:
+  - `xdg-open` (Linux) or `open` (macOS) is called and not awaited.
+  - Final behavior depends on the user’s desktop configuration.
+
+- GUI interaction (assistant dialogs, notifications) depends on optional tools:
+  - `zenity`, `kdialog`, `notify-send`
+  - If unavailable, the tool falls back silently to non-interactive behavior.
+
 
 
 ---
