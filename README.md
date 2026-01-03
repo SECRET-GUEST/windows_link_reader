@@ -30,16 +30,25 @@ At a high level it:
 - Parses common Shell Link fields (ANSI + Unicode):
   - `LocalBasePath`, `CommonPathSuffix`, `RelativePath`, `WorkingDir`, `Arguments`, `IconLocation`
 - UTF-16LE to UTF-8 conversion (including surrogate pairs)
-- Windows path normalization (`\` -> `/`) for Unix filesystem checks
+- Windows path normalization (`\` → `/`) for Unix filesystem checks
+- **Debug mode** (`--debug` or `WINDOWS_LINK_READER_DEBUG=1`)
+  - Always shows the parsed Windows target path
+  - Shows the final Linux path or URI candidate
+- **Assistant mode** (`--assist` or `WINDOWS_LINK_READER_ASSIST=1`)
+  - Helps create or fix mappings interactively when resolution fails
+  - Works both in terminal and via GUI dialogs (`zenity` / `kdialog`)
 - Drive-letter resolution:
   - User mapping file (recommended)
-  - Automatic `/proc/mounts` probing (Linux)
-  - Optional interactive prompt fallback (terminal only)
+  - Automatic `/proc/mounts` probing with scoring (Linux)
+  - Optional interactive assistant fallback
 - UNC resolution:
   - User mapping file (recommended)
   - GVFS mounts (GNOME)
   - CIFS mounts (`/proc/mounts`)
-  - SMB URI fallback (`smb://...`) if no local mount is found
+  - SMB URI fallback (`smb://...`, percent-encoded)
+- Safer resolution logic:
+  - Avoids accidental “match by chance”
+  - Rejects ambiguous mount candidates
 - Error reporting:
   - Best-effort desktop notifications (Linux/macOS)
   - Always prints a clear error to stderr
@@ -49,17 +58,19 @@ At a high level it:
 
 ## 🔍 Prerequisites
 
+Build-time:
+
 - A C compiler: `gcc` or `clang`
 
 Runtime:
 
 - Linux: `xdg-open` (usually from `xdg-utils`)
-- macOS: `open` is built-in
+- macOS: `open` (built-in)
 
-Optional (nice-to-have) for notifications on Linux:
+Optional (nice-to-have):
 
-- `notify-send` (usually `libnotify-bin`)
-- `zenity` or `kdialog`
+- Linux notifications: `notify-send`
+- GUI assistant dialogs: `zenity` or `kdialog`
 
 ---
 
@@ -72,12 +83,18 @@ chmod +x setup.sh
 
 What `setup.sh` does:
 
-- Compiles `open_lnk` from the sources under `src/` (includes from `include/`)
-- Installs the binary:
-  - Tries `/usr/local/bin/open_lnk` (via `sudo`)
-  - Falls back to `~/.local/bin/open_lnk`
-- On Linux: creates a desktop entry (`open_lnk.desktop`) and tries to register a default handler for `.lnk`
-- On Debian/Ubuntu systems: may try to install optional packages via `apt-get` (network required)
+* Compiles `open_lnk` from the sources under `src/` (includes from `include/`)
+* Installs the binary:
+
+  * Tries `/usr/local/bin/open_lnk` (via `sudo`)
+  * Falls back to `~/.local/bin/open_lnk`
+* On Linux:
+
+  * Creates a desktop entry (`open_lnk.desktop`)
+  * Tries to register a default handler for `.lnk`
+* On Debian/Ubuntu systems:
+
+  * May try to install optional packages via `apt-get` (network required)
 
 From a terminal:
 
@@ -85,11 +102,25 @@ From a terminal:
 open_lnk /path/to/file.lnk
 ```
 
+Debug / assist modes:
+
+```bash
+open_lnk --debug file.lnk
+open_lnk --assist file.lnk
+```
+
+Or via environment variables:
+
+```bash
+WINDOWS_LINK_READER_DEBUG=1 open_lnk file.lnk
+WINDOWS_LINK_READER_ASSIST=1 open_lnk file.lnk
+```
+
 After installation on Linux, you can also double-click `.lnk` files (depending on your desktop environment and MIME database state).
 
 ---
 
-## ▶️ Configuration (Drive/UNC mappings)
+## ▶️ Configuration (Drive / UNC mappings)
 
 ### Mapping file location
 
@@ -98,6 +129,8 @@ The tool loads mappings from:
 1. `$WINDOWS_LINK_READER_MAP` (if set), otherwise
 2. `$XDG_CONFIG_HOME/windows-link-reader/mappings.conf` (if `XDG_CONFIG_HOME` is set), otherwise
 3. `~/.config/windows-link-reader/mappings.conf`
+
+The file is created automatically when needed (for example in assistant mode).
 
 ### Mapping file format
 
@@ -114,25 +147,25 @@ F:=/media/me/F_Daten
 
 Notes:
 
-- Empty lines and lines starting with `#` are ignored.
-- Prefixes that are considered dangerous are ignored (examples: `/`, `/proc`, `/sys`, `/dev`, ...).
+* Empty lines and lines starting with `#` are ignored.
+* Prefixes considered dangerous are ignored (examples: `/`, `/proc`, `/sys`, `/dev`, …).
 
 ---
 
-### How resolution works (quick overview)
+## 🧭 How resolution works (quick overview)
 
-#### UNC paths (`//server/share/...`)
+### UNC paths (`//server/share/...`)
 
-1. Mappings table (`mappings.conf`)
+1. Mapping table (`mappings.conf`)
 2. GVFS mount lookup (GNOME)
 3. CIFS mount lookup (`/proc/mounts`)
 4. Fallback: build an encoded `smb://...` URI and ask the desktop to open it
 
-#### Drive paths (`X:/...`)
+### Drive paths (`X:/...`)
 
-1. Mappings table (`mappings.conf`)
+1. Mapping table (`mappings.conf`)
 2. `/proc/mounts` scoring (best-effort guess)
-3. Optional interactive prompt (terminal only) to learn the mount prefix
+3. Assistant prompt (terminal or GUI) to learn the correct mount prefix
 
 ---
 
