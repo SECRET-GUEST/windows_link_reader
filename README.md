@@ -157,7 +157,7 @@ make
 sudo make install
 ````
 
-(You can also use `setup.sh` for convenience.)
+(You can also use `setup.sh` for convenience by simply run it as a program.)
 
 ---
 
