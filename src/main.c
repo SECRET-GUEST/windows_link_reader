@@ -24,7 +24,7 @@
 #endif
 
 #ifndef OPEN_LNK_VERSION
-#define OPEN_LNK_VERSION "0.0.7"
+#define OPEN_LNK_VERSION "0.0.8"
 #endif
 
 typedef enum {
