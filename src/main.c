@@ -31,59 +31,49 @@ typedef enum {
     RESOLVE_RAW = 0,
     RESOLVE_LOCAL = 1,
     RESOLVE_CACHE = 2,
-    RESOLVE_TABLE = 3,
-    RESOLVE_GVFS = 4,
-    RESOLVE_CIFS = 5,
-    RESOLVE_MOUNTS = 6,
-    RESOLVE_URI = 7
-} ResolveKind;
+    RESOLVE_TABLE = 3
+} ResolveSource;
 
 static int g_debug = 0;
+static int g_assist = 0;
 
-static void dbg(const char *stage, const char *win_raw, const char *linux_candidate) {
-    if (!g_debug) return;
-    fprintf(stderr, "[open_lnk] %s\n", stage ? stage : "debug");
-    fprintf(stderr, "  windows: %s\n", win_raw ? win_raw : "(null)");
-    fprintf(stderr, "  linux  : %s\n", linux_candidate ? linux_candidate : "(null)");
+static void dbg(const char *stage, const char *win, const char *lin) {
+    if (!g_debug && !g_assist) return;
+    fprintf(stderr, "[%s] win='%s'\n", stage, win ? win : "(null)");
+    fprintf(stderr, "[%s] lin='%s'\n", stage, lin ? lin : "(null)");
 }
 
-static void usage(void) {
-    showError("Usage: open-lnk [--debug] [--version] <file.lnk>");
-}
+static int has_prog_in_path(const char *prog) {
+    if (!prog || !*prog) return 0;
+    const char *path = getenv("PATH");
+    if (!path) return 0;
 
-static int looks_like_drive_path(const char *p) {
-    return p && strlen(p) >= 3 &&
-           isalpha((unsigned char)p[0]) &&
-           p[1] == ':' &&
-           (p[2] == '/' || p[2] == '\\');
-}
-
-static int looks_like_unc_path(const char *p) {
-    if (!p) return 0;
-    return (strncmp(p, "//", 2) == 0) || (strncmp(p, "\\\\", 2) == 0);
-}
-
-static char *abs_path_or_dup(const char *p) {
-    if (!p) return NULL;
     char tmp[PATH_MAX];
-    if (realpath(p, tmp)) return strdup(tmp);
-    return strdup(p);
+    const char *p = path;
+
+    while (*p) {
+        const char *sep = strchr(p, ':');
+        size_t len = sep ? (size_t)(sep - p) : strlen(p);
+
+        if (len > 0 && len < sizeof(tmp) - 2) {
+            memcpy(tmp, p, len);
+            tmp[len] = 0;
+
+            size_t need = len + 1 + strlen(prog) + 1;
+            if (need < sizeof(tmp)) {
+                tmp[len] = '/';
+                strcpy(tmp + len + 1, prog);
+                if (access(tmp, X_OK) == 0) return 1;
+            }
+        }
+
+        if (!sep) break;
+        p = sep + 1;
+    }
+
+    return 0;
 }
 
-static char *build_candidate_from_prefix(const char *prefix, const char *driveTarget /* X:/... */) {
-    if (!prefix || !*prefix || !driveTarget || strlen(driveTarget) < 3) return NULL;
-
-    const char *suffix = driveTarget + 2; // points at "/..."
-    if (*suffix == '\\') suffix++;
-    char buf[PATH_MAX];
-
-    if (*suffix == '/') snprintf(buf, sizeof(buf), "%s%s", prefix, suffix);
-    else snprintf(buf, sizeof(buf), "%s/%s", prefix, suffix);
-
-    return strdup(buf);
-}
-
-// -------- capture stdout + exit code --------
 static int run_capture(char *const argv[], char *out, size_t outsz) {
     if (!out || outsz == 0) return -1;
     out[0] = 0;
@@ -100,6 +90,7 @@ static int run_capture(char *const argv[], char *out, size_t outsz) {
 
     if (pid == 0) {
         dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[0]);
         close(pipefd[1]);
         execvp(argv[0], argv);
@@ -107,78 +98,51 @@ static int run_capture(char *const argv[], char *out, size_t outsz) {
     }
 
     close(pipefd[1]);
-    ssize_t n = read(pipefd[0], out, (ssize_t)(outsz - 1));
-    if (n < 0) n = 0;
-    out[n] = 0;
+    ssize_t r = read(pipefd[0], out, outsz - 1);
     close(pipefd[0]);
+    if (r < 0) r = 0;
+    out[(size_t)r] = 0;
 
     int st = 0;
-    if (waitpid(pid, &st, 0) < 0) return -1;
+    waitpid(pid, &st, 0);
     if (WIFEXITED(st)) return WEXITSTATUS(st);
     return -1;
 }
 
-static int has_prog_in_path(const char *name) {
-    if (!name || !*name) return 0;
-    const char *path = getenv("PATH");
-    if (!path) return 0;
-
-    char *dup = strdup(path);
-    if (!dup) return 0;
-
-    int ok = 0;
-    char *save = NULL;
-    for (char *tok = strtok_r(dup, ":", &save); tok; tok = strtok_r(NULL, ":", &save)) {
-        char full[4096];
-        int r = snprintf(full, sizeof(full), "%s/%s", tok, name);
-        if (r > 0 && r < (int)sizeof(full) && access(full, X_OK) == 0) {
-            ok = 1;
-            break;
-        }
-    }
-
-    free(dup);
-    return ok;
+static int looks_like_drive_path(const char *p) {
+    if (!p || strlen(p) < 3) return 0;
+    if (!isalpha((unsigned char)p[0])) return 0;
+    if (p[1] != ':') return 0;
+    if (p[2] != '/' && p[2] != '\\') return 0;
+    return 1;
 }
 
-// -------- read mountpoints (Linux) --------
-static char **read_mountpoints(int *count) {
-    if (count) *count = 0;
+static int looks_like_unc_path(const char *p) {
+    if (!p || strlen(p) < 5) return 0;
+    return (strncmp(p, "//", 2) == 0) || (strncmp(p, "\\\\", 2) == 0);
+}
 
-    FILE *f = fopen("/proc/self/mounts", "r");
-    if (!f) return NULL;
+static char *abs_path_or_dup(const char *p) {
+    if (!p) return NULL;
+    char tmp[PATH_MAX];
+    if (realpath(p, tmp)) return strdup(tmp);
+    return strdup(p);
+}
 
-    char **items = NULL;
-    int n = 0, cap = 0;
+static char *build_candidate_from_prefix(const char *prefix, const char *driveTarget /* X:/... */) {
+    if (!prefix || !*prefix || !driveTarget || strlen(driveTarget) < 3) return NULL;
 
-    char dev[512], mnt[1024], fstype[128], opts[1024];
-    int a = 0, b = 0;
+    const char *suffix = driveTarget + 2; // points at "/..."
+    if (*suffix == '\\') suffix++;
 
-    while (fscanf(f, "%511s %1023s %127s %1023s %d %d\n", dev, mnt, fstype, opts, &a, &b) == 6) {
-        if (strncmp(mnt, "/proc", 5) == 0) continue;
-        if (strncmp(mnt, "/sys", 4) == 0) continue;
-        if (strncmp(mnt, "/dev", 4) == 0) continue;
-        if (strncmp(mnt, "/run", 4) == 0) continue;
+    char joined[PATH_MAX];
+    snprintf(joined, sizeof(joined), "%s%s", prefix, suffix);
 
-        int exists = 0;
-        for (int i = 0; i < n; i++) {
-            if (strcmp(items[i], mnt) == 0) { exists = 1; break; }
-        }
-        if (exists) continue;
-
-        if (n == cap) {
-            int ncap = (cap == 0) ? 16 : cap * 2;
-            char **tmp = (char **)realloc(items, (size_t)ncap * sizeof(char *));
-            if (!tmp) break;
-            items = tmp;
-            cap = ncap;
-        }
-        items[n++] = strdup(mnt);
+    for (char *c = joined; *c; c++) {
+        if (*c == '\\') *c = '/';
     }
 
-    fclose(f);
-    if (count) *count = n;
-    return items;
+    return strdup(joined);
 }
 
 static void free_mountpoints(char **items, int n) {
@@ -199,16 +163,19 @@ static char *assist_choose_prefix_zenity(void) {
     }
 
     // zenity --list ... + rows ; plus an extra button for manual entry
+    // We output only the selected mount path.
     char *argv[4096];
     int k = 0;
+
     argv[k++] = "zenity";
     argv[k++] = "--list";
     argv[k++] = "--title=Open LNK";
-    argv[k++] = "--text=Select a mount point for this shortcut.";
-    argv[k++] = "--column=Mount point";
-    argv[k++] = "--ok-label=Use";
+    argv[k++] = "--text=Select a mount point for this shortcut:";
+    argv[k++] = "--column=Mount";
+    argv[k++] = "--hide-header";
+    argv[k++] = "--height=420";
+    argv[k++] = "--width=800";
     argv[k++] = "--extra-button=Manual path";
-    argv[k++] = "--cancel-label=Cancel";
 
     for (int i = 0; i < n && k < (int)(sizeof(argv)/sizeof(argv[0])) - 2; i++) {
         argv[k++] = mnts[i];
@@ -228,12 +195,77 @@ static char *assist_choose_prefix_zenity(void) {
     // If user clicked extra button, zenity may still return 0 but output is empty (depends on versions).
     if (ec == 0) {
         if (out[0] == 0) {
-            // manual entry
+            // Manual input
             char *argv2[] = {
-                "zenity", "--entry",
+                "zenity",
+                "--entry",
                 "--title=Open LNK",
                 "--text=Enter the mount prefix (example: /mnt/GAWAIN)",
-                "--entry-text=",
+                NULL
+            };
+            char out2[4096];
+            int ec2 = run_capture(argv2, out2, sizeof(out2));
+            while (*out2 && (out2[strlen(out2) - 1] == '\n' || out2[strlen(out2) - 1] == '\r')) {
+                out2[strlen(out2) - 1] = 0;
+            }
+            if (ec2 == 0 && out2[0]) picked = strdup(out2);
+        } else {
+            picked = strdup(out);
+        }
+    }
+
+    free_mountpoints(mnts, n);
+    return picked;
+}
+
+// -------- assistant: choose prefix via kdialog --------
+static char *assist_choose_prefix_kdialog(void) {
+    if (!has_prog_in_path("kdialog")) return NULL;
+
+    int n = 0;
+    char **mnts = read_mountpoints(&n);
+    if (!mnts || n <= 0) {
+        free_mountpoints(mnts, n);
+        return NULL;
+    }
+
+    // kdialog --menu expects pairs: <tag> <item>
+    // We'll use the mount path for both tag and item.
+    // Add a manual entry option as first item.
+    char *argv[4096];
+    int k = 0;
+    argv[k++] = "kdialog";
+    argv[k++] = "--title";
+    argv[k++] = "Open LNK";
+    argv[k++] = "--menu";
+    argv[k++] = "Select a mount point for this shortcut:";
+
+    argv[k++] = "__MANUAL__";
+    argv[k++] = "Manual path";
+
+    for (int i = 0; i < n && k < (int)(sizeof(argv) / sizeof(argv[0])) - 3; i++) {
+        argv[k++] = mnts[i];
+        argv[k++] = mnts[i];
+    }
+    argv[k] = NULL;
+
+    char out[4096];
+    int ec = run_capture(argv, out, sizeof(out));
+
+    while (*out && (out[strlen(out) - 1] == '\n' || out[strlen(out) - 1] == '\r')) {
+        out[strlen(out) - 1] = 0;
+    }
+
+    char *picked = NULL;
+    if (ec == 0 && out[0]) {
+        if (strcmp(out, "__MANUAL__") == 0) {
+            char *argv2[] = {
+                "kdialog",
+                "--title",
+                "Open LNK",
+                "--inputbox",
+                "Enter the mount prefix (example: /mnt/GAWAIN)",
+                "",
                 NULL
             };
             char out2[4096];
@@ -274,62 +306,81 @@ static int try_open_candidate(const char *win_raw, const char *cand, const char 
 }
 
 int main(int argc, char *argv[]) {
-    const char *envd = getenv("WINDOWS_LINK_READER_DEBUG");
-    if (envd && *envd && strcmp(envd, "0") != 0) g_debug = 1;
-
-    const char *lnk_path = NULL;
+    const char *lnkPath = NULL;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--debug") == 0) { g_debug = 1; continue; }
-        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "-V") == 0) {
-            printf("open_lnk %s\n", OPEN_LNK_VERSION);
+        if (!strcmp(argv[i], "--debug")) g_debug = 1;
+        else if (!strcmp(argv[i], "--assist")) g_assist = 1;
+        else if (!strcmp(argv[i], "--version")) {
+            printf("%s\n", OPEN_LNK_VERSION);
             return 0;
-        }
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            usage();
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf("Usage: open_lnk [--debug] [--assist] <file.lnk>\n");
             return 0;
+        } else {
+            lnkPath = argv[i];
         }
-        if (!lnk_path) lnk_path = argv[i];
     }
 
-    if (!lnk_path) { usage(); return 1; }
+    if (!lnkPath) {
+        fprintf(stderr, "No .lnk provided.\n");
+        return 1;
+    }
 
-    char *lnk_abs = abs_path_or_dup(lnk_path);
+    // load & parse lnk
+    LnkInfo info = {0};
+    if (parseLnkFile(lnkPath, &info) != 0) {
+        showError("Open LNK", "Failed to parse .lnk file.");
+        return 1;
+    }
 
-    FILE *f = fopen(lnk_path, "rb");
-    if (!f) { showError("Cannot open .lnk file"); free(lnk_abs); return 1; }
+    char *win_raw = lnk_get_best_target_raw(&info);
+    if (!win_raw || !*win_raw) {
+        free(win_raw);
+        freeLnkInfo(&info);
+        showError("Open LNK", "No target path found in .lnk file.");
+        return 1;
+    }
 
-    LnkInfo info;
-    if (!parse_lnk(f, &info)) { fclose(f); free(lnk_abs); return 1; }
-    fclose(f);
+    // normalize target slashes to forward (internal)
+    char *target = strdup(win_raw);
+    for (char *c = target; *c; c++) if (*c == '\\') *c = '/';
 
-    char *target = build_best_target(&info);
-    if (!target) { freeLnkInfo(&info); showError("No target path found"); free(lnk_abs); return 1; }
+    // compute absolute path of lnk for per-link cache
+    char *lnk_abs = abs_path_or_dup(lnkPath);
 
-    char *win_raw = strdup(target);
-    normalize_backslashes(target);
-    dbg("normalized", win_raw, target);
+    // mapping file (drive/UNC tables)
+    char *mapPath = ml_get_default_path();
+    MappingList maps = {0};
+    (void)ml_load(&maps, mapPath);
 
-    // Load mappings
-    MapList maps = {0};
-    char *mapPath = NULL;
+    // 0) RAW local path already on Linux
+    if (is_abs_posix_path(target)) {
+        if (try_open_candidate(win_raw, target, "raw:posix") == 0) goto ok;
+    }
 
-    const char *envp = getenv("WINDOWS_LINK_READER_MAP");
-    if (envp && *envp) mapPath = strdup(envp);
-    else mapPath = default_map_path();
+    // 1) UNC shares
+    if (looks_like_unc_path(target)) {
+        // first check explicit mapping rules
+        char *unc_mapped = ml_map_unc(&maps, target);
+        if (unc_mapped) {
+            if (try_open_candidate(win_raw, unc_mapped, "unc:table") == 0) {
+                free(unc_mapped);
+                goto ok;
+            }
+            free(unc_mapped);
+        }
 
-    if (mapPath) load_map_file(mapPath, &maps);
-
-    // 1) Raw local path
-    if (path_exists(target)) {
-        dbg("open:raw", win_raw, target);
-        if (open_with_desktop(target) == 0) {
-            free(target); free(win_raw);
-            freeLnkInfo(&info);
-            ml_free(&maps);
-            free(mapPath);
-            free(lnk_abs);
-            return 0;
+        // then try GVFS style (smb://)
+        char *smb = unc_to_smb_uri(target);
+        if (smb) {
+            dbg("unc:smb", win_raw, smb);
+            // if gvfs available try to open URI
+            if (gvfs_open_uri(smb) == 0) {
+                free(smb);
+                goto ok;
+            }
+            free(smb);
         }
     }
 
@@ -354,43 +405,34 @@ int main(int argc, char *argv[]) {
         free(pfx);
     }
 
-    char *uri_fallback = NULL;
-
-    // 3) UNC strategies (no assistant)
-    if (looks_like_unc_path(target)) {
-        char *r = try_map_unc_with_table(target, &maps);
-        if (r) { free(target); target = r; }
-        if (try_open_candidate(win_raw, target, "unc:table") == 0) goto ok;
-
-        r = try_map_unc_via_gvfs(target);
-        if (r) { free(target); target = r; }
-        if (try_open_candidate(win_raw, target, "unc:gvfs") == 0) goto ok;
-
-        r = try_map_unc_to_cifs_mounts(target);
-        if (r) { free(target); target = r; }
-        if (try_open_candidate(win_raw, target, "unc:cifs") == 0) goto ok;
-
-        uri_fallback = unc_to_smb_uri_encoded(target);
-        if (uri_fallback && *uri_fallback) {
-            dbg("unc:uri", win_raw, uri_fallback);
-            if (open_with_desktop(uri_fallback) == 0) goto ok;
+    // 3) Drive: mapping table
+    if (looks_like_drive_path(target)) {
+        char *mapped = ml_map_drive(&maps, target);
+        if (mapped) {
+            if (try_open_candidate(win_raw, mapped, "drive:table") == 0) {
+                free(mapped);
+                goto ok;
+            }
+            free(mapped);
         }
     }
 
-    // 4) Drive strategies (no assistant)
+    // 4) Drive: try guessing mounts from /proc/mounts
     if (looks_like_drive_path(target)) {
-        char *r = try_map_drive_with_table(target, &maps);
-        if (r) { free(target); target = r; }
-        if (try_open_candidate(win_raw, target, "drive:table") == 0) goto ok;
-
-        r = try_map_drive_to_mounts_scored(target);
-        if (r) { free(target); target = r; }
-        if (try_open_candidate(win_raw, target, "drive:mounts") == 0) goto ok;
+        char *guess = guess_drive_mount(target);
+        if (guess) {
+            if (try_open_candidate(win_raw, guess, "drive:mounts") == 0) {
+                free(guess);
+                goto ok;
+            }
+            free(guess);
+        }
     }
 
     // 5) LAST RESORT assistant (only now)
     if (looks_like_drive_path(target) && lnk_abs) {
         char *prefix = assist_choose_prefix_zenity();
+        if (!prefix) prefix = assist_choose_prefix_kdialog();
         if (!prefix) prefix = assist_choose_prefix_tty();
 
         if (prefix && *prefix) {
@@ -409,32 +451,19 @@ int main(int argc, char *argv[]) {
         free(prefix);
     }
 
-    // FAIL
-    {
-        char buf[1024];
-        if (uri_fallback && *uri_fallback) snprintf(buf, sizeof(buf), "Failed to open: %s (and %s)", target, uri_fallback);
-        else snprintf(buf, sizeof(buf), "Failed to open: %s", target);
-        showError(buf);
+    // not resolved
+    dbg("fail", win_raw, "(no resolution)");
+    showError("Open LNK", "Could not resolve this shortcut target.\nTry --debug or --assist from terminal.");
 
-        if (g_debug) {
-            fprintf(stderr, "[open_lnk] final\n  windows: %s\n  linux  : %s\n",
-                    win_raw ? win_raw : "(null)",
-                    target ? target : "(null)");
-            if (uri_fallback && *uri_fallback) fprintf(stderr, "  uri    : %s\n", uri_fallback);
-        }
-    }
-
-    free(uri_fallback);
     free(target);
     free(win_raw);
     freeLnkInfo(&info);
     ml_free(&maps);
     free(mapPath);
     free(lnk_abs);
-    return 1;
+    return 2;
 
 ok:
-    free(uri_fallback);
     free(target);
     free(win_raw);
     freeLnkInfo(&info);
