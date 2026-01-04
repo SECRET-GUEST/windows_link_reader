@@ -126,25 +126,33 @@ done
 
 BIN_SYS="/usr/local/bin/open_lnk"
 BIN_USER="$HOME/.local/bin/open_lnk"
+BIN_INSTALLED=""
 
 say "[*] Installing binary..."
 if need_cmd sudo; then
   if sudo install -m0755 open_lnk "$BIN_SYS"; then
     ok "Installed to $BIN_SYS"
+    BIN_INSTALLED="$BIN_SYS"
   else
     warn "System install failed; trying user install"
     mkdir -p "$(dirname "$BIN_USER")"
     install -m0755 open_lnk "$BIN_USER"
     ok "Installed to $BIN_USER"
+    BIN_INSTALLED="$BIN_USER"
   fi
 else
   mkdir -p "$(dirname "$BIN_USER")"
   install -m0755 open_lnk "$BIN_USER"
   ok "Installed to $BIN_USER"
+  BIN_INSTALLED="$BIN_USER"
 fi
 
 if ! need_cmd open_lnk; then
   warn "open_lnk is not on PATH. Consider: export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
+
+if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
+  say "[*] Installed version: $("$BIN_INSTALLED" --version 2>/dev/null || echo unknown)"
 fi
 
 # Soft dependencies (best-effort): xdg-open + notify-send
@@ -161,6 +169,13 @@ if [ "$OS" = "Linux" ]; then
     install_pkg libnotify-bin || install_pkg libnotify || warn "notify-send not installed"
   else
     ok "notify-send available"
+  fi
+
+  if ! need_cmd zenity && ! need_cmd kdialog; then
+    say "[*] Installing GUI dialog tool (zenity recommended)..."
+    install_pkg zenity || warn "zenity not installed (GUI assistant may be unavailable)"
+  else
+    ok "GUI dialog tool available"
   fi
 fi
 
@@ -185,7 +200,22 @@ if [ "$OS" = "Linux" ]; then
 
   say "[*] Installing desktop entry + icon..."
 
-  if need_cmd sudo && sudo -n true >/dev/null 2>&1; then
+  DESK_EXEC="$BIN_INSTALLED"
+  if [ -z "${DESK_EXEC:-}" ]; then
+    DESK_EXEC="open_lnk"
+  fi
+
+  # If we installed to ~/.local/bin, always install desktop integration in user scope
+  # to avoid a system-wide desktop entry pointing into a specific HOME.
+  if [ "$DESK_EXEC" = "$BIN_USER" ]; then
+    sudo_ok=0
+  elif need_cmd sudo && sudo -n true >/dev/null 2>&1; then
+    sudo_ok=1
+  else
+    sudo_ok=0
+  fi
+
+  if [ "$sudo_ok" -eq 1 ]; then
     if [ -f "$ICON_SRC" ]; then
       sudo install -D -m0644 "$ICON_SRC" "$ICON_SYS"
       ok "Icon at $ICON_SYS"
@@ -197,8 +227,8 @@ if [ "$OS" = "Linux" ]; then
 [Desktop Entry]
 Name=Open LNK
 Comment=Open WinDdos .lnk shortcuts
-Exec=open_lnk %U
-TryExec=open_lnk
+Exec=$DESK_EXEC %F
+TryExec=$DESK_EXEC
 Type=Application
 MimeType=application/x-ms-shortcut;
 Icon=$ICON_SYS
@@ -218,8 +248,8 @@ EOF
 [Desktop Entry]
 Name=Open LNK
 Comment=Open WinDdos .lnk shortcuts
-Exec=open_lnk %U
-TryExec=open_lnk
+Exec=$DESK_EXEC %F
+TryExec=$DESK_EXEC
 Type=Application
 MimeType=application/x-ms-shortcut;
 Icon=$ICON_USER
