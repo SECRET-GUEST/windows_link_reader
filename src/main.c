@@ -21,7 +21,7 @@
 #include <sys/wait.h>
 
 #ifndef OPEN_LNK_VERSION
-#define OPEN_LNK_VERSION "0.0.11"
+#define OPEN_LNK_VERSION "0.0.12"
 #endif
 
 static int g_debug = 0;
