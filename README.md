@@ -215,7 +215,7 @@ Released under the **MIT License**.
 
 ## ❓ Support
 
-Please open an issue on GitHub if you encounter a problem or have suggestions:
+Please open an issue on GitHub if you encounter a problem or have (real) suggestions :
 [https://github.com/SECRET-GUEST/windows_link_reader/issues](https://github.com/SECRET-GUEST/windows_link_reader/issues)
 
 
