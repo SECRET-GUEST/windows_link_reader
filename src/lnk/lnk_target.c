@@ -21,6 +21,68 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int looks_like_drive_path(const char *p) {
+    if (!p || strlen(p) < 3) return 0;
+    if (!isalpha((unsigned char)p[0])) return 0;
+    if (p[1] != ':') return 0;
+    if (p[2] != '\\' && p[2] != '/') return 0;
+    return 1;
+}
+
+static int looks_like_drive_root(const char *p) {
+    if (!p || strlen(p) != 2) return 0;
+    return (isalpha((unsigned char)p[0]) && p[1] == ':');
+}
+
+static int looks_like_unc_path(const char *p) {
+    if (!p || strlen(p) < 5) return 0;
+    return ((p[0] == '\\' && p[1] == '\\') || (p[0] == '/' && p[1] == '/'));
+}
+
+/*
+ * Normalize a UNC root string to start with "\\\\" and use backslashes.
+ *
+ * Examples:
+ *   "\\\\server\\share"  -> unchanged
+ *   "\\server\\share"    -> "\\\\server\\share"
+ *   "//server/share"     -> "\\\\server\\share"
+ *   "server\\share"      -> "\\\\server\\share"
+ */
+static char *normalize_unc_root(const char *s) {
+    if (!s || !*s) return NULL;
+
+    /* First normalize all '/' to '\\' so we keep Windows semantics here. */
+    char *tmp = strdup(s);
+    if (!tmp) return NULL;
+    for (char *p = tmp; *p; p++) {
+        if (*p == '/') *p = '\\';
+    }
+
+    if (tmp[0] == '\\' && tmp[1] == '\\') {
+        return tmp;
+    }
+
+    size_t n = strlen(tmp);
+    if (tmp[0] == '\\') {
+        /* Single leading backslash -> add one more. */
+        char *out = (char*)malloc(n + 2);
+        if (!out) { free(tmp); return NULL; }
+        out[0] = '\\';
+        memcpy(out + 1, tmp, n + 1);
+        free(tmp);
+        return out;
+    }
+
+    /* No leading backslash -> add two. */
+    char *out = (char*)malloc(n + 3);
+    if (!out) { free(tmp); return NULL; }
+    out[0] = '\\';
+    out[1] = '\\';
+    memcpy(out + 2, tmp, n + 1);
+    free(tmp);
+    return out;
+}
+
 /*
  * Case-insensitive "prefix match".
  *
@@ -107,27 +169,64 @@ static char *join_win_paths(const char *base, const char *suffix) {
 char *build_best_target(LnkInfo *li) {
     if (!li) return NULL;
 
-    const char *base = li->localBasePathU ? li->localBasePathU : li->localBasePath;
+    const char *base_local = li->localBasePathU ? li->localBasePathU : li->localBasePath;
+    const char *base_net_raw = li->netNameU ? li->netNameU : li->netName;
+    const char *base_dev = li->deviceNameU ? li->deviceNameU : li->deviceName;
     const char *suf  = li->commonPathSuffixU ? li->commonPathSuffixU : li->commonPathSuffix;
 
-    if (base && *base && suf && *suf) {
-        char *j = join_win_paths(base, suf);
-        if (j) return j;
+    char *base_net_norm = NULL;
+    const char *base_net = NULL;
+    if (base_net_raw && *base_net_raw) {
+        base_net_norm = normalize_unc_root(base_net_raw);
+        if (base_net_norm && *base_net_norm) base_net = base_net_norm;
     }
 
-    if (base && *base) return strdup(base);
+    const char *base = base_local;
+
+    /*
+     * Prefer UNC base when available:
+     * - Network shortcuts often also store a drive letter (M:).
+     * - The UNC ("\\\\server\\\\share") is more portable for Linux resolution.
+     */
+    if (base_net && *base_net && looks_like_unc_path(base_net)) {
+        if (!base || !*base || looks_like_drive_path(base) || looks_like_drive_root(base)) {
+            base = base_net;
+        }
+    }
+
+    /* If LocalBasePath is empty, fall back to DeviceName (ex: "M:"). */
+    if ((!base || !*base) && base_dev && *base_dev) {
+        base = base_dev;
+    }
+
+    char *candidate = NULL;
+    if (base && *base && suf && *suf) candidate = join_win_paths(base, suf);
+    if (!candidate && base && *base) candidate = strdup(base);
 
     /* Fallback: WorkingDir + RelativePath, only if both are present and non-empty. */
-    if (li->workingDir && li->relativePath && *li->workingDir && *li->relativePath) {
+    if (!candidate && li->workingDir && li->relativePath && *li->workingDir && *li->relativePath) {
         size_t n = strlen(li->workingDir) + 1 + strlen(li->relativePath) + 1;
         char *s = (char*)malloc(n);
-        if (!s) return NULL;
+        if (!s) { free(base_net_norm); return NULL; }
         snprintf(s, n, "%s\\%s", li->workingDir, li->relativePath);
-        return s;
+        candidate = s;
     }
 
-    if (li->relativePath && *li->relativePath) return strdup(li->relativePath);
-    if (suf && *suf) return strdup(suf);
+    if (!candidate && li->relativePath && *li->relativePath) candidate = strdup(li->relativePath);
+    if (!candidate && suf && *suf) candidate = strdup(suf);
 
-    return NULL;
+    /*
+     * If our best candidate is NOT a drive/UNC path (common for network shortcuts
+     * when LinkInfo is incomplete), fall back to the best-effort IDList extraction.
+     */
+    if ((!candidate || (!looks_like_drive_path(candidate) && !looks_like_unc_path(candidate))) &&
+        li->idListPath && *li->idListPath &&
+        (looks_like_drive_path(li->idListPath) || looks_like_unc_path(li->idListPath))) {
+        free(candidate);
+        free(base_net_norm);
+        return strdup(li->idListPath);
+    }
+
+    free(base_net_norm);
+    return candidate;
 }

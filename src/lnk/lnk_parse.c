@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ctype.h>
+
 /*
  * The Shell Link header is a packed on-disk structure.
  * We use packing to match the exact byte layout in the file.
@@ -58,6 +60,11 @@ void freeLnkInfo(LnkInfo *li) {
     if (!li) return;
     free(li->localBasePath);
     free(li->localBasePathU);
+    free(li->netName);
+    free(li->netNameU);
+    free(li->deviceName);
+    free(li->deviceNameU);
+    free(li->idListPath);
     free(li->commonPathSuffix);
     free(li->commonPathSuffixU);
     free(li->nameString);
@@ -68,6 +75,197 @@ void freeLnkInfo(LnkInfo *li) {
 
     /* Leave the struct in a clean state if it is reused after freeing. */
     memset(li, 0, sizeof(*li));
+}
+
+static int looks_like_drive_path(const char *p) {
+    if (!p || strlen(p) < 3) return 0;
+    if (!isalpha((unsigned char)p[0])) return 0;
+    if (p[1] != ':') return 0;
+    if (p[2] != '\\' && p[2] != '/') return 0;
+    return 1;
+}
+
+static int looks_like_unc_path(const char *p) {
+    if (!p || strlen(p) < 5) return 0;
+    return ((p[0] == '\\' && p[1] == '\\') || (p[0] == '/' && p[1] == '/'));
+}
+
+static int count_drive_segments(const char *p) {
+    if (!looks_like_drive_path(p)) return 0;
+    const char *s = p + 3; /* after "X:\" */
+    int seg = 0;
+    int in_seg = 0;
+    for (; *s; s++) {
+        if (*s == '\\' || *s == '/') {
+            if (in_seg) { seg++; in_seg = 0; }
+        } else {
+            in_seg = 1;
+        }
+    }
+    if (in_seg) seg++;
+    return seg;
+}
+
+static int count_unc_rest_segments(const char *p) {
+    if (!looks_like_unc_path(p)) return 0;
+
+    /* Normalize separators for counting only. */
+    int seg = 0;
+    const char *s = p;
+    while (*s == '\\' || *s == '/') s++;
+
+    /* server */
+    while (*s && *s != '\\' && *s != '/') s++;
+    if (!*s) return 0;
+    while (*s == '\\' || *s == '/') s++;
+
+    /* share */
+    while (*s && *s != '\\' && *s != '/') s++;
+    if (!*s) return 0;
+    while (*s == '\\' || *s == '/') s++;
+
+    /* rest segments after share */
+    int in_seg = 0;
+    for (; *s; s++) {
+        if (*s == '\\' || *s == '/') {
+            if (in_seg) { seg++; in_seg = 0; }
+        } else {
+            in_seg = 1;
+        }
+    }
+    if (in_seg) seg++;
+    return seg;
+}
+
+static int score_idlist_candidate(const char *s) {
+    if (!s || !*s) return -1;
+    if (looks_like_unc_path(s)) {
+        int rest = count_unc_rest_segments(s);
+        return rest * 100 + 50 + (int)(strlen(s) / 8);
+    }
+    if (looks_like_drive_path(s)) {
+        int seg = count_drive_segments(s);
+        return seg * 100 + 40 + (int)(strlen(s) / 8);
+    }
+    return -1;
+}
+
+static char *dup_c_string_bounded(const unsigned char *buf, size_t buflen, size_t start, size_t cap) {
+    if (!buf || start >= buflen || cap == 0) return NULL;
+    size_t max = buflen < start + cap ? buflen : start + cap;
+
+    /*
+     * Strings embedded in IDLists are not always NUL-terminated. We stop on:
+     * - NUL
+     * - control characters (likely binary after the string)
+     */
+    size_t n = 0;
+    while (start + n < max) {
+        unsigned char c = buf[start + n];
+        if (c == 0) break;
+        if (c < 0x20 && c != '\t') break;
+        n++;
+    }
+    if (n == 0) return NULL;
+
+    char *out = (char *)malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, buf + start, n);
+    out[n] = 0;
+    return out;
+}
+
+static char *dup_utf16le_string_bounded(const unsigned char *buf, size_t buflen, size_t start, size_t max_units) {
+    if (!buf || start + 2 > buflen) return NULL;
+    size_t max_bytes = buflen - start;
+    size_t units_avail = max_bytes / 2;
+    if (units_avail == 0) return NULL;
+    if (max_units > units_avail) max_units = units_avail;
+    if (max_units == 0) return NULL;
+
+    /* Copy into uint16_t array so we can reuse lnk_utf16le_to_utf8. */
+    uint16_t *w = (uint16_t *)malloc((max_units + 1) * sizeof(uint16_t));
+    if (!w) return NULL;
+    size_t j = 0;
+    for (; j < max_units; j++) {
+        uint16_t cu = (uint16_t)buf[start + j * 2] | ((uint16_t)buf[start + j * 2 + 1] << 8);
+        w[j] = cu;
+        if (cu == 0) break;
+    }
+    w[max_units] = 0;
+
+    char *out = lnk_utf16le_to_utf8(w, max_units + 1);
+    free(w);
+    return out;
+}
+
+static char *extract_best_path_from_idlist(const unsigned char *buf, size_t buflen) {
+    if (!buf || buflen < 4) return NULL;
+
+    char *best = NULL;
+    int bestScore = -1;
+
+    /* ASCII scan for strings that look like paths. */
+    for (size_t i = 0; i + 4 < buflen; i++) {
+        /* Drive letter: "X:\\" */
+        if (isalpha(buf[i]) && buf[i + 1] == ':' && (buf[i + 2] == '\\' || buf[i + 2] == '/')) {
+            char *cand = dup_c_string_bounded(buf, buflen, i, 4096);
+            int sc = score_idlist_candidate(cand);
+            if (sc > bestScore) {
+                free(best);
+                best = cand;
+                bestScore = sc;
+            } else {
+                free(cand);
+            }
+        }
+
+        /* UNC: "\\\\server\\share" */
+        if (buf[i] == '\\' && buf[i + 1] == '\\') {
+            char *cand = dup_c_string_bounded(buf, buflen, i, 4096);
+            int sc = score_idlist_candidate(cand);
+            if (sc > bestScore) {
+                free(best);
+                best = cand;
+                bestScore = sc;
+            } else {
+                free(cand);
+            }
+        }
+    }
+
+    /* UTF-16LE scan (best-effort; not always aligned). */
+    for (size_t i = 0; i + 8 < buflen; i++) {
+        /* Drive: 'X' ':' '\\' in UTF-16LE */
+        if (isalpha(buf[i]) && buf[i + 1] == 0 &&
+            buf[i + 2] == ':' && buf[i + 3] == 0 &&
+            (buf[i + 4] == '\\' || buf[i + 4] == '/') && buf[i + 5] == 0) {
+            char *cand = dup_utf16le_string_bounded(buf, buflen, i, 4096);
+            int sc = score_idlist_candidate(cand);
+            if (sc > bestScore) {
+                free(best);
+                best = cand;
+                bestScore = sc;
+            } else {
+                free(cand);
+            }
+        }
+
+        /* UNC: '\\' '\\' in UTF-16LE */
+        if (buf[i] == '\\' && buf[i + 1] == 0 && buf[i + 2] == '\\' && buf[i + 3] == 0) {
+            char *cand = dup_utf16le_string_bounded(buf, buflen, i, 4096);
+            int sc = score_idlist_candidate(cand);
+            if (sc > bestScore) {
+                free(best);
+                best = cand;
+                bestScore = sc;
+            } else {
+                free(cand);
+            }
+        }
+    }
+
+    return best;
 }
 
 int parse_lnk(FILE *f, LnkInfo *out) {
@@ -95,12 +293,22 @@ int parse_lnk(FILE *f, LnkInfo *out) {
 
     /*
      * 2) Optional LinkTargetIDList:
-     * We do not use it for resolution here, so we simply skip it.
+     * Some shortcuts store the full target path only in the binary IDList.
+     * We extract a best-effort path from it as a fallback for resolution.
      */
     if (hdr.linkFlags & HAS_LINK_TARGET_IDLIST) {
         uint16_t idListSize = 0;
         if (fread(&idListSize, sizeof(idListSize), 1, f) != 1) { showError("Bad IDList size"); return 0; }
-        if (fseek(f, idListSize, SEEK_CUR) != 0) { showError("Skip IDList failed"); return 0; }
+
+        unsigned char *idbuf = (unsigned char *)malloc(idListSize);
+        if (!idbuf) return 0;
+        if (fread(idbuf, 1, idListSize, f) != idListSize) {
+            free(idbuf);
+            showError("Bad IDList data");
+            return 0;
+        }
+        out->idListPath = extract_best_path_from_idlist(idbuf, idListSize);
+        free(idbuf);
     }
 
     /*
@@ -152,6 +360,65 @@ int parse_lnk(FILE *f, LnkInfo *out) {
         } else if (cpsOff && cpsOff < liSize) {
             fseek(f, li_start + (long)cpsOff, SEEK_SET);
             out->commonPathSuffix = lnk_read_c_string(f, 1u << 20);
+        }
+
+        /*
+         * CommonNetworkRelativeLink (UNC root + optional drive letter)
+         *
+         * Network shortcuts frequently store the share root in the CNRL structure:
+         *   - NetName: "\\\\server\\\\share" (or a variant like "\\server\\share")
+         *   - DeviceName: "M:" (mapped network drive)
+         *
+         * If we don't parse it, the final target may degrade to only the suffix
+         * (example: "Video\\aufheben") and become impossible to resolve.
+         */
+        if (cnrlOff && cnrlOff < liSize) {
+            long cn_start = li_start + (long)cnrlOff;
+            if (fseek(f, cn_start, SEEK_SET) == 0) {
+                uint32_t cnSize = 0;
+                if (fread(&cnSize, 4, 1, f) == 1) {
+                    /* Basic sanity: header is 0x14 bytes minimum. */
+                    if (cnSize >= 0x14 && cnSize <= (liSize - cnrlOff)) {
+                        uint32_t cnFlags = 0, netOff = 0, devOff = 0, prov = 0;
+                        if (fread(&cnFlags, 4, 1, f) == 1 &&
+                            fread(&netOff, 4, 1, f) == 1 &&
+                            fread(&devOff, 4, 1, f) == 1 &&
+                            fread(&prov, 4, 1, f) == 1) {
+                            (void)cnFlags; (void)prov;
+
+                            uint32_t netOffU = 0, devOffU = 0;
+                            if (cnSize >= 0x1C) {
+                                if (fread(&netOffU, 4, 1, f) != 1) netOffU = 0;
+                                if (fread(&devOffU, 4, 1, f) != 1) devOffU = 0;
+                            }
+
+                            /* Prefer Unicode NetName when present. */
+                            if (!out->netNameU && netOffU && netOffU < cnSize) {
+                                if (fseek(f, cn_start + (long)netOffU, SEEK_SET) == 0) {
+                                    out->netNameU = lnk_read_w_string(f, 65535);
+                                }
+                            }
+                            if (!out->netName && (!out->netNameU || !*out->netNameU) && netOff && netOff < cnSize) {
+                                if (fseek(f, cn_start + (long)netOff, SEEK_SET) == 0) {
+                                    out->netName = lnk_read_c_string(f, 1u << 20);
+                                }
+                            }
+
+                            /* Prefer Unicode DeviceName when present. */
+                            if (!out->deviceNameU && devOffU && devOffU < cnSize) {
+                                if (fseek(f, cn_start + (long)devOffU, SEEK_SET) == 0) {
+                                    out->deviceNameU = lnk_read_w_string(f, 65535);
+                                }
+                            }
+                            if (!out->deviceName && (!out->deviceNameU || !*out->deviceNameU) && devOff && devOff < cnSize) {
+                                if (fseek(f, cn_start + (long)devOff, SEEK_SET) == 0) {
+                                    out->deviceName = lnk_read_c_string(f, 1u << 20);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         /* Seek to the end of LinkInfo so the next reads start at the right place. */

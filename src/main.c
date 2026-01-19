@@ -21,7 +21,7 @@
 #include <sys/wait.h>
 
 #ifndef OPEN_LNK_VERSION
-#define OPEN_LNK_VERSION "0.0.12"
+#define OPEN_LNK_VERSION "0.0.13"
 #endif
 
 static int g_debug = 0;
@@ -770,10 +770,36 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps) {
 
     dbg("fail", win_raw, "(no resolution)");
     {
-        char msg[8192];
+        char msg[16384];
         snprintf(msg, sizeof(msg),
-                 "Could not resolve this shortcut target.\n\nLNK file:\n%s\n\nWindows target:\n%s",
-                 lnk_path, win_raw);
+                 "Could not resolve this shortcut target.\n\n"
+                 "LNK file:\n%s\n\n"
+                 "Windows target (raw):\n%s\n\n"
+                 "Extracted fields:\n"
+                 "  LocalBasePath: %s\n"
+                 "  LocalBasePathU: %s\n"
+                 "  NetName (CNRL): %s\n"
+                 "  NetNameU (CNRL): %s\n"
+                 "  DeviceName (CNRL): %s\n"
+                 "  DeviceNameU (CNRL): %s\n"
+                 "  CommonPathSuffix: %s\n"
+                 "  CommonPathSuffixU: %s\n"
+                 "  IDListPath: %s\n"
+                 "  RelativePath: %s\n"
+                 "  WorkingDir: %s\n",
+                 lnk_path,
+                 win_raw ? win_raw : "(null)",
+                 info.localBasePath ? info.localBasePath : "(null)",
+                 info.localBasePathU ? info.localBasePathU : "(null)",
+                 info.netName ? info.netName : "(null)",
+                 info.netNameU ? info.netNameU : "(null)",
+                 info.deviceName ? info.deviceName : "(null)",
+                 info.deviceNameU ? info.deviceNameU : "(null)",
+                 info.commonPathSuffix ? info.commonPathSuffix : "(null)",
+                 info.commonPathSuffixU ? info.commonPathSuffixU : "(null)",
+                 info.idListPath ? info.idListPath : "(null)",
+                 info.relativePath ? info.relativePath : "(null)",
+                 info.workingDir ? info.workingDir : "(null)");
         showError(msg);
     }
 

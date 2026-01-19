@@ -16,6 +16,14 @@
 typedef struct {
     char *localBasePath;
     char *localBasePathU;
+    /* For network targets: "\\\\server\\\\share" (from CommonNetworkRelativeLink). */
+    char *netName;
+    char *netNameU;
+    /* For mapped network drives: "M:" / "M:\\" (from CommonNetworkRelativeLink). */
+    char *deviceName;
+    char *deviceNameU;
+    /* Best-effort target extracted from the LinkTargetIDList (binary shell PIDL). */
+    char *idListPath;
     char *commonPathSuffix;
     char *commonPathSuffixU;
     char *nameString;
