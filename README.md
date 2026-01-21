@@ -9,19 +9,6 @@
 ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝
                                                                               
 ```
-## Release notes — v0.0.15 (English)
-
-**v0.0.15**
-
-* Improved uninstaller reliability across Linux and macOS.
-* Removes binaries from common system/user locations.
-* Cleans Linux desktop integration (desktop entry, icon, caches, MIME DB) best-effort.
-* Removes the macOS wrapper app (`~/Applications/Open LNK.app`) if present.
-* Clearer output and safer behavior when `sudo` or tools are missing.
-
----
-
-## README (updated section only)
 
 # LNK Reader 🖥️
 
