@@ -163,19 +163,22 @@ Optional (recommended on Linux):
 
 ## 📥 Installation
 
-### From source (manual)
+### Convenience installer
+
+You just have to run:
+
+```bash
+./setup.sh
+```
+
+
+### Alternative manual way : 
+
+You also can run it with make
 
 ```bash
 make
 sudo make install
-```
-
-### Convenience installer
-
-You can also run:
-
-```bash
-./setup.sh
 ```
 
 What it does:
