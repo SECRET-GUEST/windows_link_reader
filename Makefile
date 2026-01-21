@@ -3,6 +3,13 @@ CFLAGS  ?= -Wall -Wextra -O2
 CFLAGS  += -Iinclude
 LDFLAGS ?=
 
+PREFIX  ?= /usr/local
+BINDIR  ?= $(PREFIX)/bin
+DESTDIR ?=
+
+INSTALL ?= install
+RM      ?= rm -f
+
 SRC = \
     src/main.c \
     src/lnk/lnk_io.c \
@@ -31,7 +38,14 @@ $(BIN): $(OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-clean:
-	rm -f $(OBJ) $(BIN)
+install: $(BIN)
+	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
+	$(INSTALL) -m 0755 "$(BIN)" "$(DESTDIR)$(BINDIR)/$(BIN)"
 
-.PHONY: all clean
+uninstall:
+	$(RM) "$(DESTDIR)$(BINDIR)/$(BIN)"
+
+clean:
+	$(RM) $(OBJ) $(BIN)
+
+.PHONY: all install uninstall clean
