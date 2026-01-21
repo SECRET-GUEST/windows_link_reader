@@ -69,6 +69,14 @@ if [ "$OS" = "Linux" ]; then
     # There's no universal "unset" in xdg-mime; we just report current handler.
     xdg-mime query default application/x-ms-shortcut 2>/dev/null || true
   fi
+elif [ "$OS" = "Darwin" ]; then
+  APP_USER="$HOME/Applications/Open LNK.app"
+  say "[*] Removing macOS wrapper app (if present)..."
+  rm -rf "$APP_USER" 2>/dev/null || true
+  ok "Removed: $APP_USER (if it existed)"
+
+  say "[*] Note: Finder may keep old 'Open With' entries cached."
+  say "    If needed: log out/in, or run: killall Finder"
 else
   say "[*] Non-Linux OS detected ($OS). Removed binaries (where applicable)."
 fi
