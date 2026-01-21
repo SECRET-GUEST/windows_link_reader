@@ -177,4 +177,11 @@ char *try_map_unc_to_cifs_mounts(const char *uncPath) {
     return NULL;
 }
 
+#else
+
+char *try_map_unc_to_cifs_mounts(const char *uncPath) {
+    (void)uncPath;
+    return NULL;
+}
+
 #endif /* __linux__ */

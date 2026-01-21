@@ -21,7 +21,7 @@
 #include <sys/wait.h>
 
 #ifndef OPEN_LNK_VERSION
-#define OPEN_LNK_VERSION "0.0.13"
+#define OPEN_LNK_VERSION "0.0.14"
 #endif
 
 static int g_debug = 0;
@@ -116,6 +116,24 @@ static void rstrip_newlines(char *s) {
     while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = 0;
 }
 
+static char *escape_backslashes(const char *s) {
+    if (!s) return NULL;
+    size_t in_len = strlen(s);
+    size_t extra = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        if (s[i] == '\\') extra++;
+    }
+    char *out = (char *)malloc(in_len + extra + 1);
+    if (!out) return NULL;
+    size_t j = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        if (s[i] == '\\') out[j++] = '\\';
+        out[j++] = s[i];
+    }
+    out[j] = 0;
+    return out;
+}
+
 static int is_prefix_dangerous(const char *pfx) {
     if (!pfx || !*pfx) return 1;
     if (strcmp(pfx, "/") == 0) return 1;
@@ -153,6 +171,7 @@ static int cmp_mountpoints(const void *a, const void *b) {
     return strcmp(sa, sb);
 }
 
+#ifdef __linux__
 static int is_probably_system_mount(const char *mnt) {
     if (!mnt || !*mnt) return 1;
     if (strcmp(mnt, "/") == 0) return 1;
@@ -163,6 +182,7 @@ static int is_probably_system_mount(const char *mnt) {
     if (strncmp(mnt, "/var/lib/snapd", 13) == 0) return 1;
     return 0;
 }
+#endif
 
 static void free_str_list(char **items, int n) {
     if (!items) return;
@@ -197,6 +217,10 @@ static char **collect_mountpoints(int *n_out) {
     char **out = NULL;
     int len = 0;
     int cap = 0;
+
+#ifndef __linux__
+    (void)cap;
+#endif
 
 #ifdef __linux__
     FILE *f = fopen("/proc/mounts", "r");
@@ -393,6 +417,9 @@ static char *choose_mount_prefix_zenity(const char *title, const char *text, cha
     if (!has_prog_in_path("zenity")) return NULL;
     if (!items || n_items <= 0) return NULL;
 
+    char *safe_text = escape_backslashes(text);
+    const char *use_text = safe_text ? safe_text : text;
+
     char *argv[4096];
     int k = 0;
 
@@ -401,24 +428,31 @@ static char *choose_mount_prefix_zenity(const char *title, const char *text, cha
     argv[k++] = "--title";
     argv[k++] = (char *)title;
     argv[k++] = "--text";
-    argv[k++] = (char *)text;
+    argv[k++] = (char *)use_text;
+    argv[k++] = "--column=ID";
     argv[k++] = "--column=Mount";
+    argv[k++] = "--hide-column=1";
     argv[k++] = "--hide-header";
+    argv[k++] = "--print-column=1";
     argv[k++] = "--height=420";
     argv[k++] = "--width=800";
-    argv[k++] = "--extra-button=Manual path";
 
-    for (int i = 0; i < n_items && k < (int)(sizeof(argv) / sizeof(argv[0])) - 2; i++) {
+    argv[k++] = "__MANUAL__";
+    argv[k++] = "Manual path…";
+
+    for (int i = 0; i < n_items && k < (int)(sizeof(argv) / sizeof(argv[0])) - 3; i++) {
+        argv[k++] = items[i];
         argv[k++] = items[i];
     }
     argv[k] = NULL;
 
     char out[4096];
     int ec = run_capture(argv, out, sizeof(out));
+    free(safe_text);
     rstrip_newlines(out);
     if (ec != 0) return NULL;
 
-    if (out[0] == 0 || strcmp(out, "Manual path") == 0) {
+    if (out[0] == 0 || strcmp(out, "__MANUAL__") == 0) {
         return prompt_manual_prefix_zenity(title, "Enter mount prefix (example: /mnt/DRIVE)\n(leave empty to cancel)");
     }
 
@@ -430,6 +464,9 @@ static char *choose_mount_prefix_kdialog(const char *title, const char *text, ch
     if (!has_prog_in_path("kdialog")) return NULL;
     if (!items || n_items <= 0) return NULL;
 
+    char *safe_text = escape_backslashes(text);
+    const char *use_text = safe_text ? safe_text : text;
+
     char *argv[4096];
     int k = 0;
 
@@ -437,7 +474,7 @@ static char *choose_mount_prefix_kdialog(const char *title, const char *text, ch
     argv[k++] = "--title";
     argv[k++] = (char *)title;
     argv[k++] = "--menu";
-    argv[k++] = (char *)text;
+    argv[k++] = (char *)use_text;
 
     argv[k++] = "__MANUAL__";
     argv[k++] = "Manual path";
@@ -450,6 +487,7 @@ static char *choose_mount_prefix_kdialog(const char *title, const char *text, ch
 
     char out[4096];
     int ec = run_capture(argv, out, sizeof(out));
+    free(safe_text);
     rstrip_newlines(out);
     if (ec != 0 || !out[0]) return NULL;
 
@@ -513,7 +551,7 @@ static char *get_mapping_path(void) {
     return default_map_path();
 }
 
-static int handle_one_lnk(const char *lnk_arg, const MapList *maps) {
+static int handle_one_lnk(const char *lnk_arg, const MapList *maps, const char *map_path) {
     if (!lnk_arg || !*lnk_arg) return 1;
 
     char *lnk_path = file_uri_to_path(lnk_arg);
@@ -673,9 +711,28 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps) {
                     char title[64];
                     snprintf(title, sizeof(title), "Open LNK");
                     char text[4096];
+                    char winPrefix[600];
+                    snprintf(winPrefix, sizeof(winPrefix), "\\\\%s\\%s", server, share);
                     snprintf(text, sizeof(text),
-                             "Select the mount prefix for share %s:\n%s\n\n(Manual path is available if needed.)",
-                             root, win_raw);
+                             "This assistant maps a Windows share to a Linux mount prefix.\n\n"
+                             "Share: %s\n"
+                             "Windows prefix: %s\n"
+                             "Windows target: %s\n"
+                             "Windows suffix: %s\n"
+                             "Linux suffix: %s\n\n"
+                             "Select the Linux mount prefix where this share is mounted.\n"
+                             "Linux result preview: <prefix>%s\n\n"
+                             "Global mappings file: %s\n"
+                             "(Rules match on the share prefix only, then the suffix is appended.)",
+                             root,
+                             winPrefix,
+                             win_raw ? win_raw : "(null)",
+                             (info.commonPathSuffixU ? info.commonPathSuffixU : info.commonPathSuffix) ?
+                                 (info.commonPathSuffixU ? info.commonPathSuffixU : info.commonPathSuffix) :
+                                 "(null)",
+                             (rest && *rest) ? rest : "(empty)",
+                             (rest && *rest) ? rest : "",
+                             map_path ? map_path : "(null)");
 
                     char *prefix = NULL;
                     if (choices && n_choices > 0) {
@@ -740,9 +797,19 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps) {
             snprintf(title, sizeof(title), "Open LNK");
             char text[4096];
             snprintf(text, sizeof(text),
-                     "Select the mount prefix for drive %c:\n%s\n\n(Manual path is available if needed.)",
+                     "This assistant maps a Windows drive letter to a Linux mount prefix.\n\n"
+                     "Drive: %c:\n"
+                     "Windows target: %s\n"
+                     "Linux suffix: %s\n\n"
+                     "Select the Linux mount prefix where this drive is mounted.\n"
+                     "Linux result preview: <prefix>%s\n\n"
+                     "Global mappings file: %s\n"
+                     "(Rules match on the drive letter only, then the suffix is appended.)",
                      (char)toupper((unsigned char)target[0]),
-                     win_raw);
+                     win_raw ? win_raw : "(null)",
+                     rest,
+                     rest,
+                     map_path ? map_path : "(null)");
 
             char *prefix = NULL;
             if (good && n_good > 0) prefix = choose_mount_prefix_any(title, text, good, n_good);
@@ -854,7 +921,7 @@ int main(int argc, char *argv[]) {
 
     int rc = 0;
     for (int i = 0; i < lnk_n; i++) {
-        int r = handle_one_lnk(lnk_args[i], &maps);
+        int r = handle_one_lnk(lnk_args[i], &maps, mapPath);
         if (r != 0) rc = r;
     }
 
