@@ -190,10 +190,26 @@ if [ "$OS" = "Darwin" ]; then
   # Finder can only "Open with" .app bundles, not CLI binaries.
   # We optionally generate a tiny wrapper app so users can double-click .lnk files.
   if need_cmd osacompile; then
-    APP_DIR="$HOME/Applications"
-    APP_PATH="$APP_DIR/Open LNK.app"
+    APP_USER_DIR="$HOME/Applications"
+    APP_SYS_DIR="/Applications"
+    APP_NAME="Open LNK.app"
+
+    APP_PATH_SYS="$APP_SYS_DIR/$APP_NAME"
+    APP_PATH_USER="$APP_USER_DIR/$APP_NAME"
+
+    APP_PATH=""
+    if need_cmd sudo; then
+      # Preferred: system-wide /Applications (visible in Finder -> Applications).
+      if run_sudo mkdir -p "$APP_SYS_DIR" 2>/dev/null; then
+        APP_PATH="$APP_PATH_SYS"
+      fi
+    fi
+    if [ -z "$APP_PATH" ]; then
+      mkdir -p "$APP_USER_DIR"
+      APP_PATH="$APP_PATH_USER"
+    fi
+
     say "[*] Creating Finder wrapper app: $APP_PATH"
-    mkdir -p "$APP_DIR"
 
     TMPDIR="${TMPDIR:-/tmp}"
     tmp_script="$(mktemp "$TMPDIR/open_lnk_wrapper.XXXXXX.scpt")"
@@ -206,7 +222,7 @@ on open theItems
 end open
 EOF
 
-    if osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1; then
+    if run_sudo osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1; then
       ok "Wrapper app created."
       say "Tip: Finder -> right click a .lnk -> Get Info -> Open with -> Open LNK -> Change All"
     else

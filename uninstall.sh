@@ -70,10 +70,12 @@ if [ "$OS" = "Linux" ]; then
     xdg-mime query default application/x-ms-shortcut 2>/dev/null || true
   fi
 elif [ "$OS" = "Darwin" ]; then
+  APP_SYS="/Applications/Open LNK.app"
   APP_USER="$HOME/Applications/Open LNK.app"
   say "[*] Removing macOS wrapper app (if present)..."
+  run_sudo rm -rf "$APP_SYS" 2>/dev/null || true
   rm -rf "$APP_USER" 2>/dev/null || true
-  ok "Removed: $APP_USER (if it existed)"
+  ok "Removed: $APP_SYS / $APP_USER (if they existed)"
 
   say "[*] Note: Finder may keep old 'Open With' entries cached."
   say "    If needed: log out/in, or run: killall Finder"
