@@ -185,6 +185,39 @@ if [ "$OS" = "Darwin" ]; then
   else
     warn "macOS 'open' command not found (unexpected)."
   fi
+
+  # macOS note:
+  # Finder can only "Open with" .app bundles, not CLI binaries.
+  # We optionally generate a tiny wrapper app so users can double-click .lnk files.
+  if need_cmd osacompile; then
+    APP_DIR="$HOME/Applications"
+    APP_PATH="$APP_DIR/Open LNK.app"
+    say "[*] Creating Finder wrapper app: $APP_PATH"
+    mkdir -p "$APP_DIR"
+
+    TMPDIR="${TMPDIR:-/tmp}"
+    tmp_script="$(mktemp "$TMPDIR/open_lnk_wrapper.XXXXXX.scpt")"
+    cat >"$tmp_script" <<EOF
+on open theItems
+  repeat with anItem in theItems
+    set p to POSIX path of anItem
+    do shell script (quoted form of "$BIN_INSTALLED") & " " & quoted form of p
+  end repeat
+end open
+EOF
+
+    if osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1; then
+      ok "Wrapper app created."
+      say "Tip: Finder -> right click a .lnk -> Get Info -> Open with -> Open LNK -> Change All"
+    else
+      warn "Failed to create wrapper app (osacompile failed)."
+      say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+    fi
+    rm -f "$tmp_script" || true
+  else
+    warn "osacompile not found; can't create a Finder wrapper app."
+    say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+  fi
 fi
 
 # Desktop integration for Linux
