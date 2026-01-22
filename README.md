@@ -258,8 +258,13 @@ No manual editing required.
 
 ## ❓ Support
 
-Please open an issue on GitHub if you encounter a (real) problem or have (a useful) suggestion:
-[https://github.com/SECRET-GUEST/windows_link_reader/issues](https://github.com/SECRET-GUEST/windows_link_reader/issues)
+No more support here, excepted for good reason, and serious people.
+Diagnostic is simple ; 
+if you are not sure of what you are asking : fork then ask chadgpt to work.
+
+This program has to purpose to open lnk , not to open url, servers, or what the f* else, it just open your winddos shortcuts, and if it don't ; cheh. 
+
+thank you.
 
 
 ```
