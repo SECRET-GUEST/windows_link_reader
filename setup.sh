@@ -15,16 +15,35 @@ pause_end() {
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-run_sudo() {
-  if need_cmd sudo; then
-    sudo "$@"
+# Non-interactive sudo helper: only runs if sudo exists AND works without password.
+have_sudo_nopass() {
+  need_cmd sudo && sudo -n true >/dev/null 2>&1
+}
+
+run_sudo_nopass() {
+  # Only call this if have_sudo_nopass is true.
+  sudo -n "$@"
+}
+
+plist_buddy() {
+  # Usage: plist_buddy <use_sudo_nopass:0|1> <plist_path> <PlistBuddy command...>
+  local use_sudo="$1"
+  shift
+  local plist_path="$1"
+  shift
+
+  local pb="/usr/libexec/PlistBuddy"
+  if [ ! -x "$pb" ]; then
+    return 1
+  fi
+
+  if [ "$use_sudo" -eq 1 ]; then
+    run_sudo_nopass "$pb" -c "$*" "$plist_path"
   else
-    "$@"
+    "$pb" -c "$*" "$plist_path"
   fi
 }
 
-# Best-effort package install across many distros (NO zenity).
-# Usage: install_pkg <pkgname> [<pkgname2>...]
 install_pkg() {
   local pkgs=("$@")
   if [ "${#pkgs[@]}" -eq 0 ]; then
@@ -32,44 +51,84 @@ install_pkg() {
   fi
 
   if need_cmd apt-get; then
-    run_sudo apt-get update -y || warn "apt-get update failed"
-    run_sudo apt-get install -y "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass apt-get update -y || warn "apt-get update failed"
+      run_sudo_nopass apt-get install -y "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd apt; then
-    run_sudo apt update -y || warn "apt update failed"
-    run_sudo apt install -y "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass apt update -y || warn "apt update failed"
+      run_sudo_nopass apt install -y "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd dnf; then
-    run_sudo dnf install -y "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass dnf install -y "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd yum; then
-    run_sudo yum install -y "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass yum install -y "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd pacman; then
-    run_sudo pacman -Sy --noconfirm "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass pacman -Sy --noconfirm "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd zypper; then
-    run_sudo zypper --non-interactive install "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass zypper --non-interactive install "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd apk; then
-    run_sudo apk add --no-cache "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass apk add --no-cache "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
   if need_cmd emerge; then
-    run_sudo emerge "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass emerge "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
@@ -88,8 +147,13 @@ install_pkg() {
   fi
 
   if need_cmd port; then
-    run_sudo port selfupdate || warn "port selfupdate failed"
-    run_sudo port install "${pkgs[@]}" || return 1
+    if have_sudo_nopass; then
+      run_sudo_nopass port selfupdate || warn "port selfupdate failed"
+      run_sudo_nopass port install "${pkgs[@]}" || return 1
+    else
+      warn "sudo without password not available; please install manually: ${pkgs[*]}"
+      return 1
+    fi
     return 0
   fi
 
@@ -97,13 +161,11 @@ install_pkg() {
   return 1
 }
 
-# Reliable script directory (works even if launched via symlink/other cwd)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$SCRIPT_DIR"
 
 OS="$(uname -s || echo Unknown)"
 
-# Compiler selection
 if need_cmd gcc; then
   CC=gcc
 elif need_cmd clang; then
@@ -129,18 +191,16 @@ BIN_USER="$HOME/.local/bin/open_lnk"
 BIN_INSTALLED=""
 
 say "[*] Installing binary..."
-if need_cmd sudo; then
-  if sudo install -m0755 open_lnk "$BIN_SYS"; then
+if have_sudo_nopass; then
+  if run_sudo_nopass install -m0755 open_lnk "$BIN_SYS"; then
     ok "Installed to $BIN_SYS"
     BIN_INSTALLED="$BIN_SYS"
   else
     warn "System install failed; trying user install"
-    mkdir -p "$(dirname "$BIN_USER")"
-    install -m0755 open_lnk "$BIN_USER"
-    ok "Installed to $BIN_USER"
-    BIN_INSTALLED="$BIN_USER"
   fi
-else
+fi
+
+if [ -z "${BIN_INSTALLED:-}" ]; then
   mkdir -p "$(dirname "$BIN_USER")"
   install -m0755 open_lnk "$BIN_USER"
   ok "Installed to $BIN_USER"
@@ -155,7 +215,6 @@ if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
   say "[*] Installed version: $("$BIN_INSTALLED" --version 2>/dev/null || echo unknown)"
 fi
 
-# Soft dependencies (best-effort): xdg-open + notify-send
 if [ "$OS" = "Linux" ]; then
   if ! need_cmd xdg-open; then
     say "[*] Installing xdg-open provider (xdg-utils)..."
@@ -186,9 +245,6 @@ if [ "$OS" = "Darwin" ]; then
     warn "macOS 'open' command not found (unexpected)."
   fi
 
-  # macOS note:
-  # Finder can only "Open with" .app bundles, not CLI binaries.
-  # We optionally generate a tiny wrapper app so users can double-click .lnk files.
   if need_cmd osacompile; then
     APP_USER_DIR="$HOME/Applications"
     APP_SYS_DIR="/Applications"
@@ -198,15 +254,21 @@ if [ "$OS" = "Darwin" ]; then
     APP_PATH_USER="$APP_USER_DIR/$APP_NAME"
 
     APP_PATH=""
-    if need_cmd sudo; then
-      # Preferred: system-wide /Applications (visible in Finder -> Applications).
-      if run_sudo mkdir -p "$APP_SYS_DIR" 2>/dev/null; then
+    APP_USE_SUDO=0
+
+    # Preferred: /Applications only if sudo works without password (non-interactive).
+    if have_sudo_nopass; then
+      if run_sudo_nopass mkdir -p "$APP_SYS_DIR" >/dev/null 2>&1; then
         APP_PATH="$APP_PATH_SYS"
+        APP_USE_SUDO=1
       fi
     fi
+
+    # Fallback: ~/Applications
     if [ -z "$APP_PATH" ]; then
       mkdir -p "$APP_USER_DIR"
       APP_PATH="$APP_PATH_USER"
+      APP_USE_SUDO=0
     fi
 
     say "[*] Creating Finder wrapper app: $APP_PATH"
@@ -222,64 +284,94 @@ on open theItems
 end open
 EOF
 
-    if run_sudo osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1; then
-      ok "Wrapper app created."
-      # Ensure LaunchServices can register the app as a default handler (.lnk).
-      # Some macOS versions won't "stick" without a valid CFBundleIdentifier and document types.
-      INFO_PLIST="$APP_PATH/Contents/Info.plist"
-      PLISTBUDDY="/usr/libexec/PlistBuddy"
-      BUNDLE_ID="com.secretguest.openlnk"
-      APP_VER="0.0.0"
-      if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
-        APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.0)"
-      fi
-
-      if [ -f "$INFO_PLIST" ] && [ -x "$PLISTBUDDY" ]; then
-        say "[*] Registering .lnk document type (Info.plist)..."
-
-        run_sudo "$PLISTBUDDY" -c "Set :CFBundleIdentifier $BUNDLE_ID" "$INFO_PLIST" >/dev/null 2>&1 || \
-          run_sudo "$PLISTBUDDY" -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$INFO_PLIST" >/dev/null 2>&1 || true
-
-        run_sudo "$PLISTBUDDY" -c "Set :CFBundleName 'Open LNK'" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Set :CFBundleDisplayName 'Open LNK'" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Set :CFBundlePackageType APPL" "$INFO_PLIST" >/dev/null 2>&1 || true
-
-        run_sudo "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || \
-          run_sudo "$PLISTBUDDY" -c "Add :CFBundleShortVersionString string $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Set :CFBundleVersion $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || \
-          run_sudo "$PLISTBUDDY" -c "Add :CFBundleVersion string $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || true
-
-        run_sudo "$PLISTBUDDY" -c "Delete :CFBundleDocumentTypes" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes array" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0 dict" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string 'Windows Shortcut'" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Viewer" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array" "$INFO_PLIST" >/dev/null 2>&1 || true
-        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 string lnk" "$INFO_PLIST" >/dev/null 2>&1 || true
-      else
-        warn "Could not update Info.plist (PlistBuddy missing?). Default handler may not 'stick' in Finder."
-      fi
-
-      # Best-effort: refresh LaunchServices registration.
-      LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-      if [ -x "$LSREGISTER" ]; then
-        run_sudo "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
-      fi
-
-      say "Tip: Finder -> right click a .lnk -> Get Info -> Open with -> Open LNK -> Change All"
-      say "If Open With doesn't refresh: run 'killall Finder' or log out/in."
+    if [ "$APP_USE_SUDO" -eq 1 ]; then
+      run_sudo_nopass osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1 || {
+        warn "Failed to create wrapper app in /Applications (sudo -n). Falling back to ~/Applications."
+        mkdir -p "$APP_USER_DIR"
+        APP_PATH="$APP_PATH_USER"
+        APP_USE_SUDO=0
+        osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1 || {
+          warn "Failed to create wrapper app (osacompile failed)."
+          rm -f "$tmp_script" || true
+          say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+          pause_end; exit 0
+        }
+      }
     else
-      warn "Failed to create wrapper app (osacompile failed)."
-      say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+      osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1 || {
+        warn "Failed to create wrapper app (osacompile failed)."
+        rm -f "$tmp_script" || true
+        say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+        pause_end; exit 0
+      }
     fi
     rm -f "$tmp_script" || true
+    ok "Wrapper app created."
+
+    INFO_PLIST="$APP_PATH/Contents/Info.plist"
+    BUNDLE_ID="com.secretguest.openlnk"
+    APP_VER="0.0.16"
+    if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
+      APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.16)"
+    fi
+
+    # Patch Info.plist to be LaunchServices-friendly.
+    if [ -f "$INFO_PLIST" ]; then
+      say "[*] Patching Info.plist (bundle id, executable, version, .lnk document types)..."
+
+      # Identify executable created by osacompile: usually "applet".
+      # Keeping it stable helps "Change All" to stick.
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleExecutable applet" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleExecutable string applet" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleIdentifier $BUNDLE_ID" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleIdentifier string $BUNDLE_ID" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleName Open LNK" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleName string Open LNK" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleDisplayName Open LNK" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDisplayName string Open LNK" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundlePackageType APPL" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundlePackageType string APPL" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleShortVersionString $APP_VER" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleShortVersionString string $APP_VER" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleVersion $APP_VER" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleVersion string $APP_VER" >/dev/null 2>&1 || true
+
+      # Clean and re-add document types
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Delete :CFBundleDocumentTypes" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes array" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0 dict" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeName string Windows Shortcut" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Viewer" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 string lnk" >/dev/null 2>&1 || true
+    else
+      warn "Info.plist not found; default handler may not work in Finder."
+    fi
+
+    # Refresh LaunchServices registration (best-effort).
+    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    if [ -x "$LSREGISTER" ]; then
+      if [ "$APP_USE_SUDO" -eq 1 ]; then
+        run_sudo_nopass "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
+      else
+        "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
+      fi
+    fi
+
+    say "Tip: Finder -> right click a .lnk -> Get Info -> Open with -> Open LNK -> Change All"
+    say "If Open With doesn't refresh: run 'killall Finder' or log out/in."
   else
     warn "osacompile not found; can't create a Finder wrapper app."
     say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
   fi
 fi
 
-# Desktop integration for Linux
 if [ "$OS" = "Linux" ]; then
   ICON_SRC="$SCRIPT_DIR/assets/icons/open-lnk.svg"
   DESKTOP_NAME="open_lnk.desktop"
@@ -297,28 +389,25 @@ if [ "$OS" = "Linux" ]; then
     DESK_EXEC="open_lnk"
   fi
 
-  # If we installed to ~/.local/bin, always install desktop integration in user scope
-  # to avoid a system-wide desktop entry pointing into a specific HOME.
+  sudo_ok=0
   if [ "$DESK_EXEC" = "$BIN_USER" ]; then
     sudo_ok=0
-  elif need_cmd sudo && sudo -n true >/dev/null 2>&1; then
+  elif have_sudo_nopass; then
     sudo_ok=1
-  else
-    sudo_ok=0
   fi
 
   if [ "$sudo_ok" -eq 1 ]; then
     if [ -f "$ICON_SRC" ]; then
-      sudo install -D -m0644 "$ICON_SRC" "$ICON_SYS"
+      run_sudo_nopass install -D -m0644 "$ICON_SRC" "$ICON_SYS"
       ok "Icon at $ICON_SYS"
     else
       warn "Icon missing: $ICON_SRC"
     fi
 
-    sudo install -D -m0644 /dev/stdin "$DESK_SYS" <<EOF
+    run_sudo_nopass install -D -m0644 /dev/stdin "$DESK_SYS" <<EOF
 [Desktop Entry]
 Name=Open LNK
-Comment=Open WinDdos .lnk shortcuts
+Comment=Open Windows .lnk shortcuts
 Exec=$DESK_EXEC %F
 TryExec=$DESK_EXEC
 Type=Application
@@ -339,7 +428,7 @@ EOF
     install -D -m0644 /dev/stdin "$DESK_USER" <<EOF
 [Desktop Entry]
 Name=Open LNK
-Comment=Open WinDdos .lnk shortcuts
+Comment=Open Windows .lnk shortcuts
 Exec=$DESK_EXEC %F
 TryExec=$DESK_EXEC
 Type=Application
@@ -352,18 +441,23 @@ EOF
   fi
 
   if need_cmd update-desktop-database; then
-    sudo update-desktop-database /usr/share/applications 2>/dev/null || true
+    if have_sudo_nopass; then
+      run_sudo_nopass update-desktop-database /usr/share/applications 2>/dev/null || true
+    fi
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
   fi
 
   if need_cmd gtk-update-icon-cache; then
-    sudo gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
+    if have_sudo_nopass; then
+      run_sudo_nopass gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
+    fi
     gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
   fi
 
   if need_cmd xdg-mime; then
-    say "[*] Setting default handler for .lnk..."
-    xdg-mime default "$DESKTOP_NAME" application/x-ms-shortcut || true
+    say "[*] Setting default handler for .lnk (best-effort)..."
+    xdg-mime default "$DESKTOP_NAME" application/x-ms-shortcut 2>/dev/null || \
+      warn "xdg-mime failed (MIME type may not be registered system-wide)"
   fi
 fi
 
@@ -371,3 +465,5 @@ ok "Done."
 if [ "$OS" = "Linux" ]; then
   say "If double-click doesn't work yet, log out/in or run: update-desktop-database"
 fi
+
+pause_end
