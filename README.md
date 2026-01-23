@@ -185,7 +185,7 @@ What it does:
 
 * Builds and installs `open_lnk`
 * Installs desktop integration on Linux (desktop entry + icon)
-* On macOS, creates a small Finder wrapper app **Open LNK.app** so you can use *Open With* / double-click
+* On macOS, creates a small Finder wrapper app **Open LNK.app** so you can use *Open With* / double-click (`/Applications` preferred, fallback: `~/Applications`)
 
 ---
 
@@ -201,7 +201,7 @@ This removes:
 
 * `open_lnk` binary (system and user locations)
 * Desktop entries/icons and refreshes caches (Linux, best-effort)
-* macOS wrapper app (`~/Applications/Open LNK.app`) if present
+* macOS wrapper app (`/Applications/Open LNK.app` and `~/Applications/Open LNK.app`) if present
 
 No reboot required.
 
@@ -218,6 +218,7 @@ No reboot required.
 `open_lnk` is a command-line tool. Finder cannot list CLI binaries in *Open With*.
 After running `setup.sh`, use the generated **Open LNK.app** wrapper to set it as default handler:
 Finder → Get Info → Open with → **Open LNK** → Change All.
+If Finder doesn't refresh the list, run: `killall Finder` (or log out/in).
 
 ---
 
@@ -258,13 +259,8 @@ No manual editing required.
 
 ## ❓ Support
 
-No more support here, excepted for good reason, and serious people.
-Diagnostic is simple ; 
-if you are not sure of what you are asking : fork then ask chadgpt to work.
-
-This program has to purpose to open lnk , not to open url, servers, or what the f* else, it just open your winddos shortcuts, and if it don't ; cheh. 
-
-thank you.
+Please open an issue on GitHub if you encounter a (real) problem or have (a useful) suggestion:
+[https://github.com/SECRET-GUEST/windows_link_reader/issues](https://github.com/SECRET-GUEST/windows_link_reader/issues)
 
 
 ```
@@ -277,4 +273,3 @@ thank you.
          /   \                     /   \             /   \               /   \      /   \          /   \         /   \ /`\_`>  <_/ \  /    \      /   \          /   \               /   \      /   \     \__         \
 ________/_ __ \___________________/_ __ \___________/_ __ \______ __ ___/_ __ \____/_ __ \________/_ __ \_______/_ __ \\__/'---'\__/_/_  __ \____/_ __ \________/_ __ \_____ _______/_ __ \____/_ __ \____ __\___      )
 ```
-

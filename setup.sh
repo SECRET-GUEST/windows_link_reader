@@ -224,7 +224,50 @@ EOF
 
     if run_sudo osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1; then
       ok "Wrapper app created."
+      # Ensure LaunchServices can register the app as a default handler (.lnk).
+      # Some macOS versions won't "stick" without a valid CFBundleIdentifier and document types.
+      INFO_PLIST="$APP_PATH/Contents/Info.plist"
+      PLISTBUDDY="/usr/libexec/PlistBuddy"
+      BUNDLE_ID="com.secretguest.openlnk"
+      APP_VER="0.0.0"
+      if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
+        APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.0)"
+      fi
+
+      if [ -f "$INFO_PLIST" ] && [ -x "$PLISTBUDDY" ]; then
+        say "[*] Registering .lnk document type (Info.plist)..."
+
+        run_sudo "$PLISTBUDDY" -c "Set :CFBundleIdentifier $BUNDLE_ID" "$INFO_PLIST" >/dev/null 2>&1 || \
+          run_sudo "$PLISTBUDDY" -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$INFO_PLIST" >/dev/null 2>&1 || true
+
+        run_sudo "$PLISTBUDDY" -c "Set :CFBundleName 'Open LNK'" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Set :CFBundleDisplayName 'Open LNK'" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Set :CFBundlePackageType APPL" "$INFO_PLIST" >/dev/null 2>&1 || true
+
+        run_sudo "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || \
+          run_sudo "$PLISTBUDDY" -c "Add :CFBundleShortVersionString string $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Set :CFBundleVersion $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || \
+          run_sudo "$PLISTBUDDY" -c "Add :CFBundleVersion string $APP_VER" "$INFO_PLIST" >/dev/null 2>&1 || true
+
+        run_sudo "$PLISTBUDDY" -c "Delete :CFBundleDocumentTypes" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes array" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0 dict" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string 'Windows Shortcut'" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Viewer" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array" "$INFO_PLIST" >/dev/null 2>&1 || true
+        run_sudo "$PLISTBUDDY" -c "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 string lnk" "$INFO_PLIST" >/dev/null 2>&1 || true
+      else
+        warn "Could not update Info.plist (PlistBuddy missing?). Default handler may not 'stick' in Finder."
+      fi
+
+      # Best-effort: refresh LaunchServices registration.
+      LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+      if [ -x "$LSREGISTER" ]; then
+        run_sudo "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
+      fi
+
       say "Tip: Finder -> right click a .lnk -> Get Info -> Open with -> Open LNK -> Change All"
+      say "If Open With doesn't refresh: run 'killall Finder' or log out/in."
     else
       warn "Failed to create wrapper app (osacompile failed)."
       say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
