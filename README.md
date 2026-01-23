@@ -101,8 +101,10 @@ Resolution order:
 When a `.lnk` cannot be resolved automatically:
 
 * A **GUI dialog** lists currently mounted locations
-* The user selects the correct mount point (or enters one manually)
-* The association is saved **only for this specific `.lnk` file**
+* The user selects the correct mount point (or uses a folder chooser)
+* If the merged preview exists, `open_lnk` saves:
+  * A **global mapping rule** (drive letter or UNC share) into `mappings.conf`
+  * A **per-link cache** entry for this specific `.lnk` file
 
 This means:
 
@@ -139,6 +141,7 @@ The cache is stored safely and updated atomically (latest-wins, no duplicates).
 * Clear desktop notifications on failure
 * Safe fallbacks (parent directory, URI)
 * Optional debug output (for developers)
+* GUI runs also write a small log file: `~/.cache/windows-link-reader/open_lnk.log` (or `$XDG_CACHE_HOME/windows-link-reader/open_lnk.log`)
 
 ---
 

@@ -61,6 +61,12 @@ int load_map_file(const char *path, MapList *out);
 int append_drive_map_file(const char *path, char drive, const char *prefix);
 
 /*
+ * Append a "//server/share=/prefix" UNC rule to the mapping file.
+ * The UNC root is normalized to the canonical "//server/share" form.
+ */
+int append_unc_map_file(const char *path, const char *unc_root, const char *prefix);
+
+/*
  * Interactive fallback: ask the user to type a Linux mount prefix for a drive letter.
  *
  * This only works when stdin is a TTY (interactive terminal).

@@ -11,6 +11,11 @@
 int path_exists(const char *path);
 
 /*
+ * Return 1 if the path exists and is a directory, otherwise 0.
+ */
+int path_is_dir(const char *path);
+
+/*
  * In-place conversion from Windows backslashes to Unix slashes.
  *
  * Example:

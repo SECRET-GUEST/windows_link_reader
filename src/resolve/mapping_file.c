@@ -44,6 +44,11 @@ static int is_prefix_dangerous(const char *pfx) {
 
     /* Allow common desktop removable mounts under /run/media/... */
     if (strncmp(pfx, "/run/media/", 11) == 0) return 0;
+    /* Allow GVFS mounts (common for smb://) under /run/user/<uid>/gvfs/... */
+    if (strncmp(pfx, "/run/user/", 10) == 0) {
+        const char *gv = strstr(pfx, "/gvfs");
+        if (gv && (gv[5] == 0 || gv[5] == '/')) return 0;
+    }
 
     const char *bad[] = { "/proc", "/sys", "/dev", "/run", "/snap", "/var/lib/snapd", NULL };
     for (int i = 0; bad[i]; i++) {
@@ -215,6 +220,34 @@ int append_drive_map_file(const char *path, char drive, const char *prefix) {
     if (!f) return 0;
 
     fprintf(f, "%c:=%s\n", (char)toupper((unsigned char)drive), prefix);
+    fclose(f);
+    return 1;
+}
+
+int append_unc_map_file(const char *path, const char *unc_root, const char *prefix) {
+    /* Append a new UNC rule at the end of the mapping file (best-effort). */
+    if (!path || !unc_root || !*unc_root || !prefix) return 0;
+    if (is_prefix_dangerous(prefix)) return 0;
+
+    char *canon = normalize_unc(unc_root);
+    if (!canon) return 0;
+
+    char server[256], share[256];
+    const char *rest = NULL;
+    if (!parse_unc_share(canon, server, sizeof(server), share, sizeof(share), &rest)) {
+        free(canon);
+        return 0;
+    }
+
+    char root[600];
+    snprintf(root, sizeof(root), "//%s/%s", server, share);
+    free(canon);
+
+    ensure_parent_dir(path);
+    FILE *f = fopen(path, "a");
+    if (!f) return 0;
+
+    fprintf(f, "%s=%s\n", root, prefix);
     fclose(f);
     return 1;
 }

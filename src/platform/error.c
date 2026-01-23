@@ -14,6 +14,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -21,6 +22,24 @@
 
 static int is_executable_file(const char *path) {
     return (path && *path && access(path, X_OK) == 0);
+}
+
+static char *escape_backslashes(const char *s) {
+    if (!s) return NULL;
+    size_t in_len = strlen(s);
+    size_t extra = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        if (s[i] == '\\') extra++;
+    }
+    char *out = (char *)malloc(in_len + extra + 1);
+    if (!out) return NULL;
+    size_t j = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        if (s[i] == '\\') out[j++] = '\\';
+        out[j++] = s[i];
+    }
+    out[j] = 0;
+    return out;
 }
 
 /*
@@ -66,21 +85,31 @@ void showError(const char *message) {
     struct utsname sysinfo;
     if (uname(&sysinfo) == 0) {
         if (strcmp(sysinfo.sysname, "Darwin") == 0) {
-            char script[1024];
-            snprintf(script, sizeof(script),
-                     "display notification \"%s\" with title \"LNK Reader\"", message);
-            char *argv[] = { "osascript", "-e", script, NULL };
+            char *argv[] = {
+                "osascript",
+                "-e",
+                "on run argv\n"
+                "  display notification (item 1 of argv) with title \"LNK Reader\"\n"
+                "end run",
+                (char *)message,
+                NULL
+            };
             (void)try_spawn("osascript", argv);
         } else if (strcmp(sysinfo.sysname, "Linux") == 0) {
             char *argv1[] = { "notify-send", "LNK Reader", (char*)message, NULL };
             if (is_executable_file("/usr/bin/notify-send")) (void)try_spawn("/usr/bin/notify-send", argv1);
             else (void)try_spawn("notify-send", argv1);
 
-            char *argv2[] = { "zenity", "--error", "--text", (char*)message, NULL };
+            char *safe = escape_backslashes(message);
+            char *use = safe ? safe : (char *)message;
+
+            char *argv2[] = { "zenity", "--error", "--text", use, NULL };
             (void)try_spawn("zenity", argv2);
 
-            char *argv3[] = { "kdialog", "--error", (char*)message, NULL };
+            char *argv3[] = { "kdialog", "--error", use, NULL };
             (void)try_spawn("kdialog", argv3);
+
+            free(safe);
         }
     }
 
