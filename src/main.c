@@ -11,6 +11,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +26,7 @@
 #include <time.h>
 
 #ifndef OPEN_LNK_VERSION
-#define OPEN_LNK_VERSION "0.0.16"
+#define OPEN_LNK_VERSION "0.0.17"
 #endif
 
 static int g_debug = 0;
@@ -64,19 +65,35 @@ static void ensure_parent_dir(const char *filepath) {
     (void)mkdir(path, 0755);
 }
 
-static char *default_log_path(void) {
-    const char *xdg = getenv("XDG_CACHE_HOME");
+static const char *get_home_dir(void) {
     const char *home = getenv("HOME");
 
-    if (!home || !*home) {
-        struct passwd *pw = getpwuid(getuid());
-        if (pw && pw->pw_dir) home = pw->pw_dir;
-    }
+    if (home && *home) return home;
+
+    struct passwd *pw = getpwuid(getuid());
+    if (pw && pw->pw_dir && *pw->pw_dir) return pw->pw_dir;
+    return NULL;
+}
+
+static char *default_log_path(void) {
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    const char *home = get_home_dir();
     if ((!home || !*home) && (!xdg || !*xdg)) return NULL;
 
     char buf[PATH_MAX];
     if (xdg && *xdg) snprintf(buf, sizeof(buf), "%s/windows-link-reader/open_lnk.log", xdg);
     else snprintf(buf, sizeof(buf), "%s/.cache/windows-link-reader/open_lnk.log", home);
+    return strdup(buf);
+}
+
+static char *default_cache_links_path(void) {
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    const char *home = get_home_dir();
+    if ((!xdg || !*xdg) && (!home || !*home)) return NULL;
+
+    char buf[PATH_MAX];
+    if (xdg && *xdg) snprintf(buf, sizeof(buf), "%s/windows-link-reader/links.conf", xdg);
+    else snprintf(buf, sizeof(buf), "%s/.cache/windows-link-reader/links.conf", home);
     return strdup(buf);
 }
 
@@ -238,6 +255,17 @@ static int is_prefix_dangerous(const char *pfx) {
         if (strncmp(pfx, bad[i], n) == 0 && (pfx[n] == 0 || pfx[n] == '/')) return 1;
     }
     return 0;
+}
+
+static int cache_prefix_is_trash(const char *prefix) {
+    return (prefix && strstr(prefix, "/.local/share/Trash/") != NULL) ? 1 : 0;
+}
+
+static int path_is_missing_for_cache(const char *path) {
+    struct stat st;
+    if (!path || !*path) return 1;
+    if (stat(path, &st) == 0) return 0;
+    return (errno == ENOENT || errno == ENOTDIR) ? 1 : 0;
 }
 
 static int score_mountpoint_prefix(const char *mnt) {
@@ -778,12 +806,23 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps, const char *
     /* 1) Per-link cache (drive and UNC). */
     if ((looks_like_drive_path(target) || looks_like_unc_path(target)) && lnk_abs) {
         char *pfx = cache_get_prefix_for_lnk(lnk_abs);
+        if (pfx && *pfx && cache_prefix_is_trash(pfx)) {
+            log_line("cache: delete invalid entry (trash prefix) lnk=%s prefix=%s", lnk_abs, pfx);
+            cache_delete_prefix_for_lnk(lnk_abs);
+            free(pfx);
+            pfx = NULL;
+        }
+
         if (pfx && *pfx) {
             if (looks_like_drive_path(target)) {
                 const char *rest = target + 2; /* "/..." */
                 char *cand = join_prefix_and_rest(pfx, rest);
                 if (cand) {
-                    if (try_open_path("cache:drive", win_raw, cand) == 0) {
+                    if (path_is_missing_for_cache(cand)) {
+                        log_line("cache: delete invalid entry (missing candidate) lnk=%s prefix=%s candidate=%s",
+                                 lnk_abs, pfx, cand);
+                        cache_delete_prefix_for_lnk(lnk_abs);
+                    } else if (try_open_path("cache:drive", win_raw, cand) == 0) {
                         free(cand);
                         free(pfx);
                         goto ok;
@@ -798,7 +837,11 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps, const char *
                     if (parse_unc_share(canon, server, sizeof(server), share, sizeof(share), &rest)) {
                         char *cand = join_prefix_and_rest(pfx, rest);
                         if (cand) {
-                            if (try_open_path("cache:unc", win_raw, cand) == 0) {
+                            if (path_is_missing_for_cache(cand)) {
+                                log_line("cache: delete invalid entry (missing candidate) lnk=%s prefix=%s candidate=%s",
+                                         lnk_abs, pfx, cand);
+                                cache_delete_prefix_for_lnk(lnk_abs);
+                            } else if (try_open_path("cache:unc", win_raw, cand) == 0) {
                                 free(cand);
                                 free(canon);
                                 free(pfx);
@@ -986,13 +1029,13 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps, const char *
                             int okmap = append_unc_map_file(map_path, root, prefix);
                             log_line("assist: save unc mapping %s -> %s (%s) ok=%d", root, prefix, map_path, okmap);
                         }
-                        if (lnk_abs) {
-                            cache_set_prefix_for_lnk(lnk_abs, prefix);
-                            log_line("assist: cache prefix %s -> %s", lnk_abs, prefix);
-                        }
 
                         int rc = try_open_path("unc:assist", win_raw, cand);
                         if (rc == 0) {
+                            if (lnk_abs) {
+                                cache_set_prefix_for_lnk(lnk_abs, prefix);
+                                log_line("assist: cache prefix %s -> %s", lnk_abs, prefix);
+                            }
                             free_str_list(choices, n_choices);
                             free(cand);
                             free(prefix);
@@ -1137,13 +1180,13 @@ static int handle_one_lnk(const char *lnk_arg, const MapList *maps, const char *
                     int okmap = append_drive_map_file(map_path, drive, prefix);
                     log_line("assist: save drive mapping %c: -> %s (%s) ok=%d", drive, prefix, map_path, okmap);
                 }
-                if (lnk_abs) {
-                    cache_set_prefix_for_lnk(lnk_abs, prefix);
-                    log_line("assist: cache prefix %s -> %s", lnk_abs, prefix);
-                }
 
                 int rc = try_open_path("drive:assist", win_raw, cand);
                 if (rc == 0) {
+                    if (lnk_abs) {
+                        cache_set_prefix_for_lnk(lnk_abs, prefix);
+                        log_line("assist: cache prefix %s -> %s", lnk_abs, prefix);
+                    }
                     free_str_list(good, n_good);
                     free_str_list(mnts, n_mnts);
                     free(cand);
@@ -1218,6 +1261,7 @@ ok:
 int main(int argc, char *argv[]) {
     const char *lnk_args[256];
     int lnk_n = 0;
+    int clear_cache = 0;
 
     g_log_enabled = 0;
     const char *log_env = getenv("OPEN_LNK_LOG");
@@ -1235,16 +1279,21 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < argc; i++) log_line("argv[%d]=%s", i, argv[i] ? argv[i] : "(null)");
     }
 
+    char *cachePath = default_cache_links_path();
+    log_line("cache: file=%s", cachePath ? cachePath : "(null)");
+    free(cachePath);
+
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--debug")) g_debug = 1;
         else if (!strcmp(argv[i], "--assist")) g_assist = 1;
+        else if (!strcmp(argv[i], "--clear-cache")) clear_cache = 1;
         else if (!strcmp(argv[i], "--version")) {
             printf("%s\n", OPEN_LNK_VERSION);
             log_line("=== open_lnk end rc=0 (version) ===");
             log_close();
             return 0;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("Usage: open_lnk [--debug] [--assist] <file.lnk>...\n");
+            printf("Usage: open_lnk [--debug] [--assist] [--clear-cache] <file.lnk>...\n");
             log_line("=== open_lnk end rc=0 (help) ===");
             log_close();
             return 0;
@@ -1260,6 +1309,21 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if (clear_cache) {
+        int ok = cache_clear_all();
+        log_line("cache: clear requested ok=%d", ok);
+        if (ok) {
+            printf("Cache cleared.\n");
+            log_line("=== open_lnk end rc=0 (clear-cache) ===");
+            log_close();
+            return 0;
+        }
+        fprintf(stderr, "Failed to clear cache.\n");
+        log_line("=== open_lnk end rc=1 (clear-cache) ===");
+        log_close();
+        return 1;
+    }
+
     if (lnk_n == 0) {
         fprintf(stderr, "No .lnk provided.\n");
         log_line("=== open_lnk end rc=1 (no lnk) ===");
@@ -1270,7 +1334,14 @@ int main(int argc, char *argv[]) {
     /* Load mapping table once. */
     char *mapPath = get_mapping_path();
     MapList maps = {0};
-    if (mapPath) (void)load_map_file(mapPath, &maps);
+    log_line("map: file=%s", mapPath ? mapPath : "(null)");
+    log_line("map: load attempted");
+    if (mapPath) {
+        int loaded = load_map_file(mapPath, &maps);
+        log_line("map: load rc=%d entries=%zu", loaded, maps.len);
+    } else {
+        log_line("map: load skipped (no path)");
+    }
 
     int rc = 0;
     for (int i = 0; i < lnk_n; i++) {

@@ -33,6 +33,42 @@ static int is_tty_stdin(void) {
     return isatty(STDIN_FILENO);
 }
 
+static const char *get_home_dir(void) {
+    const char *home = getenv("HOME");
+    if (home && *home) return home;
+
+    struct passwd *pw = getpwuid(getuid());
+    if (pw && pw->pw_dir && *pw->pw_dir) return pw->pw_dir;
+    return NULL;
+}
+
+static char *expand_mapping_home_prefix(const char *prefix) {
+    const char *suffix = NULL;
+    const char *home = NULL;
+
+    if (!prefix || !*prefix) return NULL;
+
+    if (strcmp(prefix, "~") == 0) suffix = "";
+    else if (strncmp(prefix, "~/", 2) == 0) suffix = prefix + 1;
+    else if (strcmp(prefix, "$HOME") == 0) suffix = "";
+    else if (strncmp(prefix, "$HOME/", 6) == 0) suffix = prefix + 5;
+    else if (strcmp(prefix, "${HOME}") == 0) suffix = "";
+    else if (strncmp(prefix, "${HOME}/", 8) == 0) suffix = prefix + 7;
+    else return strdup(prefix);
+
+    home = get_home_dir();
+    if (!home || !*home) return NULL;
+
+    size_t home_len = strlen(home);
+    size_t suffix_len = strlen(suffix);
+    char *out = (char *)malloc(home_len + suffix_len + 1);
+    if (!out) return NULL;
+
+    memcpy(out, home, home_len);
+    memcpy(out + home_len, suffix, suffix_len + 1);
+    return out;
+}
+
 static int is_prefix_dangerous(const char *pfx) {
     /*
      * We only want mappings pointing to user-accessible mounts.
@@ -144,12 +180,7 @@ char *default_map_path(void) {
      * We also try to resolve HOME through getpwuid() as a fallback.
      */
     const char *xdg = getenv("XDG_CONFIG_HOME");
-    const char *home = getenv("HOME");
-
-    if (!home || !*home) {
-        struct passwd *pw = getpwuid(getuid());
-        if (pw && pw->pw_dir) home = pw->pw_dir;
-    }
+    const char *home = get_home_dir();
     if (!home || !*home) return NULL;
 
     char buf[PATH_MAX];
@@ -179,9 +210,20 @@ int load_map_file(const char *path, MapList *out) {
         if (isalpha((unsigned char)s[0]) && s[1] == ':' && s[2] == '=') {
             char drive = (char)toupper((unsigned char)s[0]);
             char *prefix = str_trim(s + 3);
+            char *expanded = NULL;
             if (!*prefix) continue;
-            if (is_prefix_dangerous(prefix)) continue;
-            ml_push_drive(out, drive, prefix);
+
+            expanded = expand_mapping_home_prefix(prefix);
+            if (!expanded || !*expanded) {
+                free(expanded);
+                continue;
+            }
+            if (is_prefix_dangerous(expanded)) {
+                free(expanded);
+                continue;
+            }
+            ml_push_drive(out, drive, expanded);
+            free(expanded);
             continue;
         }
 
@@ -197,13 +239,27 @@ int load_map_file(const char *path, MapList *out) {
 
         char *left = str_trim(s);
         char *right = str_trim(eq + 1);
+        char *expanded = NULL;
         if (!*left || !*right) continue;
-        if (is_prefix_dangerous(right)) continue;
+
+        expanded = expand_mapping_home_prefix(right);
+        if (!expanded || !*expanded) {
+            free(expanded);
+            continue;
+        }
+        if (is_prefix_dangerous(expanded)) {
+            free(expanded);
+            continue;
+        }
 
         char *unc = normalize_unc(left);
-        if (!unc) continue;
-        ml_push_unc(out, unc, right);
+        if (!unc) {
+            free(expanded);
+            continue;
+        }
+        ml_push_unc(out, unc, expanded);
         free(unc);
+        free(expanded);
     }
 
     fclose(f);

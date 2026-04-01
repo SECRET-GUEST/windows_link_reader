@@ -3,5 +3,7 @@
 
 char* cache_get_prefix_for_lnk(const char *lnk_abs_path);
 void  cache_set_prefix_for_lnk(const char *lnk_abs_path, const char *prefix);
+void  cache_delete_prefix_for_lnk(const char *lnk_abs_path);
+int   cache_clear_all(void);
 
 #endif
