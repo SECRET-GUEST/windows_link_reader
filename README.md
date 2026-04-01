@@ -113,6 +113,11 @@ This means:
 * No global or dangerous assumptions are made
 
 The cache is stored safely and updated atomically (latest-wins, no duplicates).
+Invalid cache entries are also self-healed automatically:
+
+* entries pointing to the Trash are ignored and removed
+* entries whose rebuilt target no longer exists are removed before the normal resolution flow continues
+* assistant-selected cache entries are only saved after a successful open
 
 ---
 
@@ -223,6 +228,14 @@ After running `setup.sh`, use the generated **Open LNK.app** wrapper to set it a
 Finder → Get Info → Open with → **Open LNK** → Change All.
 If Finder doesn't refresh the list, run: `killall Finder` (or log out/in).
 
+**Simple maintenance command:**
+
+```bash
+open_lnk --clear-cache
+```
+
+This removes the per-link cache file and exits without processing any `.lnk`.
+
 ---
 
 ## ⚙️ Configuration files
@@ -240,15 +253,45 @@ Example:
 ```ini
 # Drive letter mapping
 F:=/media/me/F_Daten
+X:=~/nas/Z
+Y:=$HOME/nas/Z
+Z:=${HOME}/nas/Z
 
 # UNC mapping
 //server/share=/mnt/share
+//server/share=~/mnt/share
 ```
+
+On the right-hand side only, `open_lnk` also supports these limited HOME shortcuts:
+
+* `~`
+* `~/...`
+* `$HOME`
+* `$HOME/...`
+* `${HOME}`
+* `${HOME}/...`
+
+No other shell expansion is performed.
 
 ### Per-link cache
 
-Stored separately and managed automatically.
-No manual editing required.
+Stored separately and managed automatically:
+
+```text
+~/.cache/windows-link-reader/links.conf
+```
+
+or:
+
+```text
+$XDG_CACHE_HOME/windows-link-reader/links.conf
+```
+
+Notes:
+
+* No manual editing is normally required
+* invalid or suspicious entries are removed automatically
+* `open_lnk --clear-cache` deletes this file if you want a full reset
 
 ---
 
