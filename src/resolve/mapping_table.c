@@ -16,6 +16,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 char *try_map_drive_with_table(const char *winPath, const MapList *maps) {
     if (!winPath || !maps) return NULL;
@@ -64,7 +65,7 @@ char *try_map_unc_with_table(const char *uncPath, const MapList *maps) {
         size_t n = strlen(e->unc);
         if (n <= bestLen) continue;
 
-        if (strncmp(uncPath, e->unc, n) == 0) {
+        if (strncasecmp(uncPath, e->unc, n) == 0) {
             /*
              * Boundary check:
              * - If the rule is "//server/share", we want to match:
