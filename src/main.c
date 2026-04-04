@@ -26,7 +26,7 @@
 #include <time.h>
 
 #ifndef OPEN_LNK_VERSION
-#define OPEN_LNK_VERSION "0.0.18"
+#define OPEN_LNK_VERSION "0.0.19"
 #endif
 
 static int g_debug = 0;

@@ -42,6 +42,15 @@ static const char *get_home_dir(void) {
     return NULL;
 }
 
+static const char *get_login_name(void) {
+    const char *user = getenv("USER");
+    if (user && *user) return user;
+
+    struct passwd *pw = getpwuid(getuid());
+    if (pw && pw->pw_name && *pw->pw_name) return pw->pw_name;
+    return NULL;
+}
+
 static char *expand_mapping_home_prefix(const char *prefix) {
     const char *suffix = NULL;
     const char *home = NULL;
@@ -66,6 +75,69 @@ static char *expand_mapping_home_prefix(const char *prefix) {
 
     memcpy(out, home, home_len);
     memcpy(out + home_len, suffix, suffix_len + 1);
+    return out;
+}
+
+static int is_plain_user_token_at(const char *p) {
+    if (!p) return 0;
+    if (strncmp(p, "$USER", 5) != 0) return 0;
+
+    unsigned char next = (unsigned char)p[5];
+    if (isalnum(next) || next == '_') return 0;
+    return 1;
+}
+
+static char *expand_mapping_unc_user_tokens(const char *s) {
+    static const char token_braced[] = "${USER}";
+    const char *user = NULL;
+    const char *p = NULL;
+    size_t user_len = 0;
+    size_t out_len = 0;
+    char *out = NULL;
+    char *dst = NULL;
+
+    if (!s) return NULL;
+    if (!*s) return strdup("");
+
+    user = get_login_name();
+    if (!user || !*user) return strdup(s);
+    user_len = strlen(user);
+
+    for (p = s; *p;) {
+        if (is_plain_user_token_at(p)) {
+            out_len += user_len;
+            p += 5;
+            continue;
+        }
+        if (strncmp(p, token_braced, sizeof(token_braced) - 1) == 0) {
+            out_len += user_len;
+            p += sizeof(token_braced) - 1;
+            continue;
+        }
+        out_len++;
+        p++;
+    }
+
+    out = (char *)malloc(out_len + 1);
+    if (!out) return NULL;
+
+    for (p = s, dst = out; *p;) {
+        if (is_plain_user_token_at(p)) {
+            memcpy(dst, user, user_len);
+            dst += user_len;
+            p += 5;
+            continue;
+        }
+        if (strncmp(p, token_braced, sizeof(token_braced) - 1) == 0) {
+            memcpy(dst, user, user_len);
+            dst += user_len;
+            p += sizeof(token_braced) - 1;
+            continue;
+        }
+        *dst++ = *p++;
+    }
+
+    *dst = 0;
     return out;
 }
 
@@ -240,6 +312,8 @@ int load_map_file(const char *path, MapList *out) {
         char *left = str_trim(s);
         char *right = str_trim(eq + 1);
         char *expanded = NULL;
+        char *unc_left = NULL;
+        char *unc = NULL;
         if (!*left || !*right) continue;
 
         expanded = expand_mapping_home_prefix(right);
@@ -252,12 +326,21 @@ int load_map_file(const char *path, MapList *out) {
             continue;
         }
 
-        char *unc = normalize_unc(left);
+        unc_left = expand_mapping_unc_user_tokens(left);
+        if (!unc_left || !*unc_left) {
+            free(unc_left);
+            free(expanded);
+            continue;
+        }
+
+        unc = normalize_unc(unc_left);
         if (!unc) {
+            free(unc_left);
             free(expanded);
             continue;
         }
         ml_push_unc(out, unc, expanded);
+        free(unc_left);
         free(unc);
         free(expanded);
     }

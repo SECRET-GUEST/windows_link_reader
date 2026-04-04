@@ -260,9 +260,10 @@ Z:=${HOME}/nas/Z
 # UNC mapping
 //server/share=/mnt/share
 //server/share=~/mnt/share
+\\share_url.fr\home\$USER=$HOME/nas/P
 ```
 
-On the right-hand side only, `open_lnk` also supports these limited HOME shortcuts:
+On the right-hand side only, `open_lnk` supports these limited HOME shortcuts:
 
 * `~`
 * `~/...`
@@ -272,6 +273,13 @@ On the right-hand side only, `open_lnk` also supports these limited HOME shortcu
 * `${HOME}/...`
 
 No other shell expansion is performed.
+
+On the left-hand side only for UNC rules, `open_lnk` supports these limited USER tokens:
+
+* `$USER`
+* `${USER}`
+
+These USER tokens are expanded before UNC normalization and matching. No other shell variables or shell syntax are expanded on the UNC side.
 
 ### Per-link cache
 
