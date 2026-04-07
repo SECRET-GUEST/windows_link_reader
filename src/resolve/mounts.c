@@ -151,8 +151,9 @@ char *try_map_unc_to_cifs_mounts(const char *uncPath) {
         if (strcasecmp(dshare, share) != 0) continue;
 
         /* Build local candidate: mountpoint + rest */
+        int wants_mounted_root = (!rest || !*rest);
         char candidate[PATH_MAX];
-        if (rest && *rest) snprintf(candidate, sizeof(candidate), "%s%s", mnt, rest);
+        if (!wants_mounted_root) snprintf(candidate, sizeof(candidate), "%s%s", mnt, rest);
         else snprintf(candidate, sizeof(candidate), "%s", mnt);
 
         if (path_exists(candidate)) {
@@ -162,10 +163,11 @@ char *try_map_unc_to_cifs_mounts(const char *uncPath) {
         }
 
         /*
-         * Sometimes the exact file doesn't exist yet (or is a dir),
-         * but the mount itself is valid.
+         * Only allow returning the bare mountpoint when the UNC points to the
+         * mounted root itself. If the UNC requested a deeper suffix, falling
+         * back to the mountpoint would produce a false positive.
          */
-        if (path_exists(mnt)) {
+        if (wants_mounted_root && path_exists(mnt)) {
             fclose(f);
             free(canon);
             return strdup(mnt);
