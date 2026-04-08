@@ -306,6 +306,29 @@ EOF
       }
     fi
     rm -f "$tmp_script" || true
+
+    # osacompile may name the binary "droplet" (drag-and-drop apps) instead of
+    # "applet".  We set CFBundleExecutable to "applet" below, so make sure the
+    # actual binary matches.  Fixes #10.
+    MACOS_DIR="$APP_PATH/Contents/MacOS"
+    if [ -f "$MACOS_DIR/droplet" ] && [ ! -f "$MACOS_DIR/applet" ]; then
+      if [ "$APP_USE_SUDO" -eq 1 ]; then
+        run_sudo_nopass mv "$MACOS_DIR/droplet" "$MACOS_DIR/applet"
+      else
+        mv "$MACOS_DIR/droplet" "$MACOS_DIR/applet"
+      fi
+    fi
+
+    # Ad-hoc sign the bundle so it launches on Apple Silicon without Gatekeeper
+    # complaints.
+    if need_cmd codesign; then
+      if [ "$APP_USE_SUDO" -eq 1 ]; then
+        run_sudo_nopass codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
+      else
+        codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
+      fi
+    fi
+
     ok "Wrapper app created."
 
     INFO_PLIST="$APP_PATH/Contents/Info.plist"
