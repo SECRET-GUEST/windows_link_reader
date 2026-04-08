@@ -306,6 +306,119 @@ EOF
       }
     fi
     rm -f "$tmp_script" || true
+
+    # osacompile may create "droplet" instead of "applet".
+    # We force CFBundleExecutable=applet below, so keep the binary name aligned.
+    MACOS_DIR="$APP_PATH/Contents/MacOS"
+    if [ -f "$MACOS_DIR/droplet" ] && [ ! -f "$MACOS_DIR/applet" ]; then
+      say "[*] Renaming wrapper executable: droplet -> applet"
+      if [ "$APP_USE_SUDO" -eq 1 ]; then
+        run_sudo_nopass mv "$MACOS_DIR/droplet" "$MACOS_DIR/applet"
+      else
+        mv "$MACOS_DIR/droplet" "$MACOS_DIR/applet"
+      fi
+    fi
+
+    ok "Wrapper app created."
+
+    INFO_PLIST="$APP_PATH/Contents/Info.plist"
+    BUNDLE_ID="com.secretguest.openlnk"
+    APP_VER="0.0.20"
+    if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
+      APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.20)"
+    fi
+
+    # Patch Info.plist and keep the bundle executable name consistent.
+    if [ -f "$INFO_PLIST" ]; then
+      say "[*] Patching Info.plist (bundle id, executable, version, .lnk document types)..."
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleExecutable applet" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleExecutable string applet" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleIdentifier $BUNDLE_ID" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleIdentifier string $BUNDLE_ID" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleName Open LNK" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleName string Open LNK" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleDisplayName Open LNK" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDisplayName string Open LNK" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundlePackageType APPL" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundlePackageType string APPL" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleShortVersionString $APP_VER" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleShortVersionString string $APP_VER" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Set :CFBundleVersion $APP_VER" >/dev/null 2>&1 || \
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleVersion string $APP_VER" >/dev/null 2>&1 || true
+
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Delete :CFBundleDocumentTypes" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes array" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0 dict" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeName string Windows Shortcut" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Viewer" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array" >/dev/null 2>&1 || true
+      plist_buddy "$APP_USE_SUDO" "$INFO_PLIST" "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 string lnk" >/dev/null 2>&1 || true
+    else
+      warn "Info.plist not found; default handler may not work in Finder."
+    fi
+
+    # Ad-hoc sign the bundle after all modifications.
+    # Best-effort only: this should not block installation.
+    if need_cmd codesign; then
+      say "[*] Ad-hoc signing Finder wrapper app..."
+      if [ "$APP_USE_SUDO" -eq 1 ]; then
+        run_sudo_nopass codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || \
+          warn "codesign failed (continuing anyway)"
+      else
+        codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || \
+          warn "codesign failed (continuing anyway)"
+      fi
+    else
+      warn "codesign not found; wrapper app may not launch correctly on some macOS systems"
+    fi
+
+    # Refresh LaunchServices registration (best-effort).
+    LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    if [ -x "$LSREGISTER" ]; then
+      if [ "$APP_USE_SUDO" -eq 1 ]; then
+        run_sudo_nopass "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
+      else
+        "$LSREGISTER" -f "$APP_PATH" >/dev/null 2>&1 || true
+      fi
+    fi
+
+    say "Tip: Finder -> right click a .lnk -> Get Info -> Open with -> Open LNK -> Change All"
+    say "If Open With doesn't refresh: run 'killall Finder' or log out/in."
+  else
+    warn "osacompile not found; can't create a Finder wrapper app."
+    say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+  fi
+fi
+
+    if [ "$APP_USE_SUDO" -eq 1 ]; then
+      run_sudo_nopass osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1 || {
+        warn "Failed to create wrapper app in /Applications (sudo -n). Falling back to ~/Applications."
+        mkdir -p "$APP_USER_DIR"
+        APP_PATH="$APP_PATH_USER"
+        APP_USE_SUDO=0
+        osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1 || {
+          warn "Failed to create wrapper app (osacompile failed)."
+          rm -f "$tmp_script" || true
+          say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+          pause_end; exit 0
+        }
+      }
+    else
+      osacompile -o "$APP_PATH" "$tmp_script" >/dev/null 2>&1 || {
+        warn "Failed to create wrapper app (osacompile failed)."
+        rm -f "$tmp_script" || true
+        say "You can still use it from Terminal: open_lnk \"/path/to/file.lnk\""
+        pause_end; exit 0
+      }
+    fi
+    rm -f "$tmp_script" || true
     ok "Wrapper app created."
 
     INFO_PLIST="$APP_PATH/Contents/Info.plist"
