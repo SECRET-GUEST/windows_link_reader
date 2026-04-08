@@ -323,9 +323,9 @@ EOF
 
     INFO_PLIST="$APP_PATH/Contents/Info.plist"
     BUNDLE_ID="com.secretguest.openlnk"
-    APP_VER="0.0.20"
+    APP_VER="0.0.21"
     if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
-      APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.20)"
+      APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.21)"
     fi
 
     # Patch Info.plist and keep the bundle executable name consistent.
@@ -423,9 +423,9 @@ fi
 
     INFO_PLIST="$APP_PATH/Contents/Info.plist"
     BUNDLE_ID="com.secretguest.openlnk"
-    APP_VER="0.0.20"
+    APP_VER="0.0.21"
     if [ -n "${BIN_INSTALLED:-}" ] && [ -x "$BIN_INSTALLED" ]; then
-      APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.20)"
+      APP_VER="$("$BIN_INSTALLED" --version 2>/dev/null || echo 0.0.21)"
     fi
 
     # Patch Info.plist to be LaunchServices-friendly.
