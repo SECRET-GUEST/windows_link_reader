@@ -30,6 +30,9 @@ The goal is simple:
 
 No terminal is needed for normal use.
 
+
+[Demo video](https://github.com/SECRET-GUEST/windows_link_reader/assets/92639080/f92222d6-e028-4166-8e6d-a9c7bd40f144)
+
 ---
 
 <a id="toc"></a>
