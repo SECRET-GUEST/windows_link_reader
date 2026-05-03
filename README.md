@@ -9,14 +9,13 @@
 ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝
                                                                               
 ```
-
-# LNK Reader 🖥️
+# LNK Reader
 
 **LNK Reader** lets you open `.lnk` shortcut files on **Linux** and **macOS**.
 
 A `.lnk` file is usually a shortcut created on Windows.
 
-With LNK Reader, you can double-click a `.lnk` file and open its real target, even when the file points to:
+With LNK Reader, you can double-click a `.lnk` file and open its real target, even when the shortcut points to:
 
 - another drive
 - an external disk
@@ -29,15 +28,37 @@ The goal is simple:
 > Double-click the shortcut.  
 > Open the real file or folder.
 
-No terminal needed for normal use.
+No terminal is needed for normal use.
 
 ---
 
-## What is this for?
+<a id="toc"></a>
 
-This app is useful if you are on Linux or macOS and you receive `.lnk` files created on Windows.
+## Contents
 
-For example, someone sends you a shortcut that points to:
+- [About](#about)
+- [Install](#install)
+- [Usage](#usage)
+- [macOS](#macos)
+- [Network](#network)
+- [Mappings](#mappings)
+- [Cache](#cache)
+- [Logs](#logs)
+- [Dev](#dev)
+- [Requirements](#requirements)
+- [Limits](#limits)
+- [Help](#help)
+- [License](#license)
+
+---
+
+<a id="about"></a>
+
+## About
+
+LNK Reader is useful when you are on Linux or macOS and you receive `.lnk` files created on Windows.
+
+For example, someone may send you a shortcut pointing to:
 
 ```text
 \\192.168.1.50\shared_folder\project
@@ -51,15 +72,13 @@ F:\Documents\Project
 
 Normally, Linux and macOS do not open `.lnk` files like Windows does.
 
-LNK Reader tries to read the shortcut, understand where it points, and open the correct place on your system.
+LNK Reader reads the shortcut, tries to understand where it points, and opens the correct file, folder, or network location.
 
----
-
-## What it can open
+### What it can open
 
 LNK Reader can open shortcuts pointing to:
 
-- normal files
+- files
 - folders
 - mounted drives
 - external disks
@@ -80,21 +99,23 @@ F:\Documents\file.pdf
 \\192.168.1.50\share_name\folder\file.txt
 ```
 
----
+### What it cannot do
 
-## What it cannot do
-
-LNK Reader does **not** magically give access to private folders.
+LNK Reader does **not** give access to private folders.
 
 If a network share needs a username or password, your operating system may still ask for it.
 
 LNK Reader can help open the right address, but it cannot bypass permissions.
 
+[Back to contents](#toc)
+
 ---
 
-## Installation
+<a id="install"></a>
 
-### Easy installation
+## Install
+
+### Easy install
 
 Run:
 
@@ -104,9 +125,7 @@ Run:
 
 This installs the app and tries to set up desktop integration.
 
----
-
-### Manual installation
+### Manual install
 
 You can also build and install it manually:
 
@@ -115,9 +134,7 @@ make
 sudo make install
 ```
 
----
-
-## Uninstall
+### Uninstall
 
 Run:
 
@@ -129,31 +146,65 @@ This removes the installed app and desktop integration.
 
 It does not delete your personal files.
 
+[Back to contents](#toc)
+
 ---
 
-## How to use it
+<a id="usage"></a>
 
-### Normal usage
+## Usage
+
+### Normal use
 
 Double-click a `.lnk` file.
 
 Or right-click it and choose:
 
 ```text
-Open With → LNK Reader
+Open With -> LNK Reader
 ```
 
 On macOS, after installation, use:
 
 ```text
-Open With → Open LNK
+Open With -> Open LNK
 ```
+
+### If the target is found
+
+LNK Reader opens the target directly.
+
+The target can be a file, a folder, a mounted drive, or a network location.
+
+### If the target is not found
+
+LNK Reader may show a small assistant window.
+
+The assistant asks you where the drive or network share is mounted on your system.
+
+For example, if a shortcut points to:
+
+```text
+F:\Documents
+```
+
+LNK Reader may ask where drive `F:` is mounted.
+
+Once you select the correct folder, LNK Reader remembers it for next time.
+
+[Back to contents](#toc)
 
 ---
 
-## macOS setup note
+<a id="macos"></a>
 
-On macOS, the real command-line tool is called `open_lnk`.
+## macOS
+
+On macOS, the real command-line tool is called:
+
+```text
+open_lnk
+```
 
 Finder usually does not show command-line tools in the “Open With” menu.
 
@@ -179,9 +230,13 @@ If Finder does not refresh immediately, restart Finder:
 killall Finder
 ```
 
+[Back to contents](#toc)
+
 ---
 
-## Network shares and SMB
+<a id="network"></a>
+
+## Network
 
 Many `.lnk` files point to shared folders.
 
@@ -203,9 +258,27 @@ This helps avoid asking the user to manually select a mounted folder when the sy
 
 The operating system may still ask for credentials if the share is protected.
 
+### Example
+
+A shortcut pointing to:
+
+```text
+\\192.168.1.50\share_name\folder\file.txt
+```
+
+can be opened as:
+
+```text
+smb://192.168.1.50/share_name/folder/file.txt
+```
+
+[Back to contents](#toc)
+
 ---
 
-## Optional mappings
+<a id="mappings"></a>
+
+## Mappings
 
 Sometimes a shortcut points to a Windows path, but your Linux or macOS system uses another path.
 
@@ -229,10 +302,6 @@ Mapping file location:
 ~/.config/windows-link-reader/mappings.conf
 ```
 
----
-
-## Mapping examples
-
 ### Drive mapping
 
 ```ini
@@ -251,9 +320,7 @@ becomes:
 /media/me/PROJECTS/something
 ```
 
----
-
-### Network share mapped to a local folder
+### Network share to local folder
 
 ```ini
 //server/share=/mnt/share
@@ -271,9 +338,7 @@ becomes:
 /mnt/share/folder
 ```
 
----
-
-### Network share mapped directly to SMB
+### Network share to SMB
 
 ```ini
 //server/share=smb://server/share
@@ -299,9 +364,7 @@ Another example:
 
 This is especially useful on macOS.
 
----
-
-## Supported shortcuts in mappings
+### Supported shortcuts
 
 On the right side of a mapping, you can use:
 
@@ -335,29 +398,17 @@ Example:
 
 No other shell expansion is done.
 
----
-
-## What happens if LNK Reader cannot find the target?
-
-If LNK Reader cannot automatically find the target, it can show a small assistant window.
-
-The assistant asks you to select the correct mounted folder.
-
-For example, if a shortcut points to:
-
-```text
-F:\Documents
-```
-
-LNK Reader may ask you where drive `F:` is mounted on your system.
-
-Once you select the correct folder, LNK Reader remembers it for next time.
+[Back to contents](#toc)
 
 ---
+
+<a id="cache"></a>
 
 ## Cache
 
-LNK Reader stores remembered choices here:
+LNK Reader remembers some choices so you do not have to repeat them every time.
+
+Cache file:
 
 ```text
 ~/.cache/windows-link-reader/links.conf
@@ -377,11 +428,19 @@ To clear the cache:
 open_lnk --clear-cache
 ```
 
+This can help if the wrong folder opens.
+
+[Back to contents](#toc)
+
 ---
+
+<a id="logs"></a>
 
 ## Logs
 
-When launched from a graphical desktop, LNK Reader writes a small log file here:
+When launched from a graphical desktop, LNK Reader writes a small log file.
+
+Default log file:
 
 ```text
 ~/.cache/windows-link-reader/open_lnk.log
@@ -393,11 +452,15 @@ or:
 $XDG_CACHE_HOME/windows-link-reader/open_lnk.log
 ```
 
-This can help when reporting a bug.
+This file can help when reporting a bug.
+
+[Back to contents](#toc)
 
 ---
 
-## Developer usage
+<a id="dev"></a>
+
+## Dev
 
 You can run the tool manually:
 
@@ -423,16 +486,20 @@ Clear cache:
 open_lnk --clear-cache
 ```
 
+[Back to contents](#toc)
+
 ---
+
+<a id="requirements"></a>
 
 ## Requirements
 
-### Build requirements
+### Build
 
 - C compiler, for example `gcc` or `clang`
 - `make`
 
-### Runtime requirements
+### Runtime
 
 Linux:
 
@@ -447,9 +514,13 @@ Optional on Linux:
 - `zenity`, for graphical dialogs
 - `notify-send`, for desktop notifications
 
+[Back to contents](#toc)
+
 ---
 
-## Limitations
+<a id="limits"></a>
+
+## Limits
 
 LNK Reader is a best-effort tool.
 
@@ -461,13 +532,15 @@ SMB links depend on the operating system’s SMB support.
 
 If a shortcut points to a file that does not exist anymore, LNK Reader cannot open it.
 
+[Back to contents](#toc)
+
 ---
 
-## Troubleshooting
+<a id="help"></a>
 
-### The shortcut does not open
+## Help
 
-Try running:
+If a shortcut does not open, try running:
 
 ```bash
 open_lnk --debug file.lnk
@@ -479,31 +552,19 @@ Then check the log file:
 ~/.cache/windows-link-reader/open_lnk.log
 ```
 
----
-
-### The wrong folder opens
-
-Clear the remembered choices:
+If the wrong folder opens, clear the cache:
 
 ```bash
 open_lnk --clear-cache
 ```
 
-Then try opening the `.lnk` file again.
-
----
-
-### A network share asks for a password
-
-That is normal if the SMB share is protected.
+If a network share asks for a password, that is normal if the share is protected.
 
 LNK Reader can open the SMB address, but the operating system handles authentication.
 
----
+### Report a bug
 
-## Support
-
-If you find a real bug or have a useful suggestion, please open an issue:
+Please open an issue here:
 
 ```text
 https://github.com/SECRET-GUEST/windows_link_reader/issues
@@ -516,11 +577,18 @@ When reporting a bug, please include:
 - whether the target is local, mounted, or network-based
 - the log file, if available
 
+[Back to contents](#toc)
+
 ---
+
+<a id="license"></a>
 
 ## License
 
 See the license file in this repository.
+
+[Back to contents](#toc)
+
 ```
      _ ._  _ , _ ._            _ ._  _ , _ ._    _ ._  _ , _ ._      _ ._  _ , _ .__  _ , _ ._   ._  _ , _ ._   _ , _ ._   .---.  _ ._   _ , _ .__  _ , _ ._   ._  _ , _ ._      _ ._  _ , _ .__  _ , _ . .---<__. \ _
    (_ ' ( `  )_  .__)        (_ ' ( `  )_  .__ (_ ' ( `  )_  .__)  (_ '    ___   ._( `  )_  .__)  ( `  )_  .__)   )_  .__)/     \(_ ' (    )_  ._( `  )_  .__)  ( `  )_  .__)  (_ ' ( `  )_  ._( `` )_  . `---._  \ \ \
