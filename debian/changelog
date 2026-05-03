@@ -1,12 +1,12 @@
-open-lnk (0.0.20-1) UNRELEASED; urgency=medium
+open-lnk (0.0.23-1) UNRELEASED; urgency=medium
 
   * Fix UNC to CIFS resolution so deeper missing paths no longer fall back
     to an unrelated mounted root.
-  * Bump release version to 0.0.20.
+  * Bump release version to 0.0.23.
 
  -- merlin <gawain@unknown>  Tue, 07 Apr 2026 18:50:36 +0200
 
-open-lnk (0.0.6-1) UNRELEASED; urgency=medium
+open-lnk (0.0.23-1) UNRELEASED; urgency=medium
 
   * Initial release. (Closes: #nnnn)  <nnnn is the bug number of your ITP>
 

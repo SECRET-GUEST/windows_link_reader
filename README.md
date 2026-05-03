@@ -12,192 +12,112 @@
 
 # LNK Reader 🖥️
 
-**open_lnk** is a lightweight desktop utility that opens Windows `.lnk` (Shell Link) shortcut files directly on Linux (and macOS).
+**LNK Reader** lets you open `.lnk` shortcut files on **Linux** and **macOS**.
 
-It is designed first and foremost for **double-click / “Open with” usage**, not for manual command-line interaction.
+A `.lnk` file is usually a shortcut created on Windows.
+
+With LNK Reader, you can double-click a `.lnk` file and open its real target, even when the file points to:
+
+- another drive
+- an external disk
+- a mounted partition
+- a shared network folder
+- an SMB share like `\\server\share`
 
 The goal is simple:
-👉 *You double-click a `.lnk` file, it opens the correct target — even if it lives on a different drive, partition, or network share.*
+
+> Double-click the shortcut.  
+> Open the real file or folder.
+
+No terminal needed for normal use.
 
 ---
 
-## 📚 Table of Contents
+## What is this for?
 
-* [Overview](#lnk-reader-️)
-* [How it works](#-how-it-works-high-level)
-* [Key Features](#-key-features)
-* [Prerequisites](#-prerequisites)
-* [Installation](#-installation)
-* [Uninstall](#-uninstall)
-* [Usage](#-usage)
-* [Configuration files](#️-configuration-files)
-* [Limitations](#-limitations)
-* [License](#-license)
-* [Support](#-support)
+This app is useful if you are on Linux or macOS and you receive `.lnk` files created on Windows.
 
----
+For example, someone sends you a shortcut that points to:
 
-## 🧠 How it works (high level)
+```text
+\\192.168.1.50\shared_folder\project
+```
 
-When a `.lnk` file is opened, `open_lnk`:
+or:
 
-1. Parses the Windows **Shell Link** binary format (subset of the official Microsoft specification).
-2. Extracts the most reliable target path from the available fields.
-3. Translates Windows paths to Linux/macOS equivalents:
+```text
+F:\Documents\Project
+```
 
-   * Drive letters (`X:\...`)
-   * UNC paths (`\\server\share\...`)
-4. Tries multiple resolution strategies automatically.
-5. Opens the resolved path or network URI using the system default handler.
+Normally, Linux and macOS do not open `.lnk` files like Windows does.
 
-If the target **cannot be resolved automatically**, a **graphical assistant** is shown to help the user select the correct mount point, and the choice is remembered for next time.
-
-[Demo video](https://github.com/SECRET-GUEST/windows_link_reader/assets/92639080/f92222d6-e028-4166-8e6d-a9c7bd40f144)
+LNK Reader tries to read the shortcut, understand where it points, and open the correct place on your system.
 
 ---
 
-## 🌟 Key Features
+## What it can open
 
-### Core features
+LNK Reader can open shortcuts pointing to:
 
-* Parses common Shell Link fields (ANSI + Unicode):
+- normal files
+- folders
+- mounted drives
+- external disks
+- network folders
+- SMB shares
 
-  * `LocalBasePath`, `CommonPathSuffix`, `RelativePath`
-  * `WorkingDir`, `Arguments`, `IconLocation`
-* Full UTF-16LE → UTF-8 conversion (including surrogate pairs)
-* Windows path normalization (`\` → `/`)
-* Best-effort resolution with safe fallbacks
-* Opens targets via:
+Examples:
 
-  * `xdg-open` (Linux)
-  * `open` (macOS)
+```text
+F:\Documents\file.pdf
+```
 
----
+```text
+\\server\share\folder
+```
 
-### Smart path resolution
-
-#### Drive letters (`X:/...`)
-
-Resolution order:
-
-1. **Per-link cache** (exact `.lnk` → mount prefix association)
-2. User mapping file (`mappings.conf`)
-3. Automatic mount probing (`/proc/mounts`, scored)
-4. **Graphical assistant** (if still unresolved)
-
-#### UNC paths (`//server/share/...`)
-
-Resolution order:
-
-1. User mapping file
-2. GVFS mounts (GNOME)
-3. CIFS mounts (`/proc/mounts`)
-4. Fallback to `smb://` URI (percent-encoded)
+```text
+\\192.168.1.50\share_name\folder\file.txt
+```
 
 ---
 
-### 🧠 Intelligent per-link cache
+## What it cannot do
 
-When a `.lnk` cannot be resolved automatically:
+LNK Reader does **not** magically give access to private folders.
 
-* A **GUI dialog** lists currently mounted locations
-* The user selects the correct mount point (or uses a folder chooser)
-* If the merged preview exists, `open_lnk` saves:
-  * A **global mapping rule** (drive letter or UNC share) into `mappings.conf`
-  * A **per-link cache** entry for this specific `.lnk` file
+If a network share needs a username or password, your operating system may still ask for it.
 
-This means:
-
-* A shortcut pointing to drive **A:** will not interfere with one pointing to **F:**
-* Re-opening the same `.lnk` is instant
-* No global or dangerous assumptions are made
-
-The cache is stored safely and updated atomically (latest-wins, no duplicates).
-Invalid cache entries are also self-healed automatically:
-
-* entries pointing to the Trash are ignored and removed
-* entries whose rebuilt target no longer exists are removed before the normal resolution flow continues
-* assistant-selected cache entries are only saved after a successful open
+LNK Reader can help open the right address, but it cannot bypass permissions.
 
 ---
 
-### 🪟 Graphical assistant (no terminal required)
+## Installation
 
-* Automatically shown **only when resolution fails**
-* Implemented via standard desktop dialogs (`zenity` or compatible tools)
-* Works when launched from:
+### Easy installation
 
-  * File manager (double-click)
-  * “Open with”
-* No command-line interaction required for normal users
-
-**What it shows (so it’s not a black box):**
-
-* Windows **prefix** (server/share or drive)
-* Windows **suffix**
-* Detected Linux mount points
-* A preview of the final merged path
-  Matching is done on the **prefix only**.
-
----
-
-### Error handling & diagnostics
-
-* Clear desktop notifications on failure
-* Safe fallbacks (parent directory, URI)
-* Optional debug output (for developers)
-* GUI runs also write a small log file: `~/.cache/windows-link-reader/open_lnk.log` (or `$XDG_CACHE_HOME/windows-link-reader/open_lnk.log`)
-
----
-
-## 🔍 Prerequisites
-
-### Build-time
-
-* A C compiler (`gcc` or `clang`)
-* `make`
-
-### Runtime
-
-* Linux: `xdg-open` (from `xdg-utils`)
-* macOS: `open` (built-in)
-
-Optional (recommended on Linux):
-
-* `zenity` or compatible dialog tool (graphical assistant)
-* `notify-send` (desktop notifications)
-
----
-
-## 📥 Installation
-
-### Convenience installer
-
-You just have to run:
+Run:
 
 ```bash
 ./setup.sh
 ```
 
+This installs the app and tries to set up desktop integration.
 
-### Alternative manual way : 
+---
 
-You also can run it with make
+### Manual installation
+
+You can also build and install it manually:
 
 ```bash
 make
 sudo make install
 ```
 
-What it does:
-
-* Builds and installs `open_lnk`
-* Installs desktop integration on Linux (desktop entry + icon)
-* On macOS, creates a small Finder wrapper app **Open LNK.app** so you can use *Open With* / double-click (`/Applications` preferred, fallback: `~/Applications`)
-
 ---
 
-## 🧹 Uninstall
+## Uninstall
 
 Run:
 
@@ -205,85 +125,239 @@ Run:
 ./uninstall.sh
 ```
 
-This removes:
+This removes the installed app and desktop integration.
 
-* `open_lnk` binary (system and user locations)
-* Desktop entries/icons and refreshes caches (Linux, best-effort)
-* macOS wrapper app (`/Applications/Open LNK.app` and `~/Applications/Open LNK.app`) if present
-
-No reboot required.
+It does not delete your personal files.
 
 ---
 
-## ▶️ Usage
+## How to use it
 
-**Normal usage (recommended):**
+### Normal usage
 
-* Double-click a `.lnk` file
-* Or right-click → *Open with* → **LNK Reader** / **Open LNK**
+Double-click a `.lnk` file.
 
-**macOS note:**
-`open_lnk` is a command-line tool. Finder cannot list CLI binaries in *Open With*.
-After running `setup.sh`, use the generated **Open LNK.app** wrapper to set it as default handler:
-Finder → Get Info → Open with → **Open LNK** → Change All.
-If Finder doesn't refresh the list, run: `killall Finder` (or log out/in).
+Or right-click it and choose:
 
-**Simple maintenance command:**
+```text
+Open With → LNK Reader
+```
+
+On macOS, after installation, use:
+
+```text
+Open With → Open LNK
+```
+
+---
+
+## macOS setup note
+
+On macOS, the real command-line tool is called `open_lnk`.
+
+Finder usually does not show command-line tools in the “Open With” menu.
+
+That is why the installer creates a small app wrapper:
+
+```text
+Open LNK.app
+```
+
+After running `setup.sh`, you can set it as the default app for `.lnk` files:
+
+```text
+Right-click a .lnk file
+Get Info
+Open with
+Choose Open LNK
+Change All
+```
+
+If Finder does not refresh immediately, restart Finder:
 
 ```bash
-open_lnk --clear-cache
+killall Finder
 ```
-
-This removes the per-link cache file and exits without processing any `.lnk`.
 
 ---
 
-## ⚙️ Configuration files
+## Network shares and SMB
 
-### Mapping file (optional)
+Many `.lnk` files point to shared folders.
 
-Used for global drive / UNC mappings:
+Example:
 
+```text
+\\192.168.1.50\share_name
 ```
+
+LNK Reader understands this kind of path.
+
+On macOS, it can try to open it directly as:
+
+```text
+smb://192.168.1.50/share_name
+```
+
+This helps avoid asking the user to manually select a mounted folder when the system can already handle SMB links.
+
+The operating system may still ask for credentials if the share is protected.
+
+---
+
+## Optional mappings
+
+Sometimes a shortcut points to a Windows path, but your Linux or macOS system uses another path.
+
+For example, the shortcut says:
+
+```text
+F:\Projects
+```
+
+But on your system, that drive is mounted here:
+
+```text
+/media/me/PROJECTS
+```
+
+You can tell LNK Reader how to translate paths using a mapping file.
+
+Mapping file location:
+
+```text
 ~/.config/windows-link-reader/mappings.conf
+```
+
+---
+
+## Mapping examples
+
+### Drive mapping
+
+```ini
+F:=/media/me/PROJECTS
+```
+
+This means:
+
+```text
+F:\something
+```
+
+becomes:
+
+```text
+/media/me/PROJECTS/something
+```
+
+---
+
+### Network share mapped to a local folder
+
+```ini
+//server/share=/mnt/share
+```
+
+This means:
+
+```text
+\\server\share\folder
+```
+
+becomes:
+
+```text
+/mnt/share/folder
+```
+
+---
+
+### Network share mapped directly to SMB
+
+```ini
+//server/share=smb://server/share
+```
+
+This means:
+
+```text
+\\server\share\folder
+```
+
+becomes:
+
+```text
+smb://server/share/folder
+```
+
+Another example:
+
+```ini
+//192.168.1.50/share_name=smb://192.168.1.50/share_name
+```
+
+This is especially useful on macOS.
+
+---
+
+## Supported shortcuts in mappings
+
+On the right side of a mapping, you can use:
+
+```text
+~
+~/folder
+$HOME
+$HOME/folder
+${HOME}
+${HOME}/folder
 ```
 
 Example:
 
 ```ini
-# Drive letter mapping
-F:=/media/me/F_Daten
-X:=~/nas/Z
-Y:=$HOME/nas/Z
-Z:=${HOME}/nas/Z
-
-# UNC mapping
-//server/share=/mnt/share
-//server/share=~/mnt/share
-\\share_url.fr\home\$USER=$HOME/nas/P
+Z:=$HOME/my_drive
 ```
 
-On the right-hand side only, `open_lnk` supports these limited HOME shortcuts:
+For network share names, you can also use:
 
-* `~`
-* `~/...`
-* `$HOME`
-* `$HOME/...`
-* `${HOME}`
-* `${HOME}/...`
+```text
+$USER
+${USER}
+```
 
-No other shell expansion is performed.
+Example:
 
-On the left-hand side only for UNC rules, `open_lnk` supports these limited USER tokens:
+```ini
+\\server\home\$USER=$HOME/server_home
+```
 
-* `$USER`
-* `${USER}`
+No other shell expansion is done.
 
-These USER tokens are expanded before UNC normalization and matching. No other shell variables or shell syntax are expanded on the UNC side.
+---
 
-### Per-link cache
+## What happens if LNK Reader cannot find the target?
 
-Stored separately and managed automatically:
+If LNK Reader cannot automatically find the target, it can show a small assistant window.
+
+The assistant asks you to select the correct mounted folder.
+
+For example, if a shortcut points to:
+
+```text
+F:\Documents
+```
+
+LNK Reader may ask you where drive `F:` is mounted on your system.
+
+Once you select the correct folder, LNK Reader remembers it for next time.
+
+---
+
+## Cache
+
+LNK Reader stores remembered choices here:
 
 ```text
 ~/.cache/windows-link-reader/links.conf
@@ -295,28 +369,158 @@ or:
 $XDG_CACHE_HOME/windows-link-reader/links.conf
 ```
 
-Notes:
+You usually do not need to edit this file manually.
 
-* No manual editing is normally required
-* invalid or suspicious entries are removed automatically
-* `open_lnk --clear-cache` deletes this file if you want a full reset
+To clear the cache:
 
----
-
-## ⛔ Limitations
-
-* Not a full implementation of every Shell Link feature (some ExtraData blocks are ignored)
-* Resolution is best-effort and depends on available mounts
-* Network shares may still require authentication handled by the OS
+```bash
+open_lnk --clear-cache
+```
 
 ---
 
-## ❓ Support
+## Logs
 
-Please open an issue on GitHub if you encounter a (real) problem or have (a useful) suggestion:
-[https://github.com/SECRET-GUEST/windows_link_reader/issues](https://github.com/SECRET-GUEST/windows_link_reader/issues)
+When launched from a graphical desktop, LNK Reader writes a small log file here:
 
+```text
+~/.cache/windows-link-reader/open_lnk.log
+```
 
+or:
+
+```text
+$XDG_CACHE_HOME/windows-link-reader/open_lnk.log
+```
+
+This can help when reporting a bug.
+
+---
+
+## Developer usage
+
+You can run the tool manually:
+
+```bash
+open_lnk file.lnk
+```
+
+Debug mode:
+
+```bash
+open_lnk --debug file.lnk
+```
+
+Show version:
+
+```bash
+open_lnk --version
+```
+
+Clear cache:
+
+```bash
+open_lnk --clear-cache
+```
+
+---
+
+## Requirements
+
+### Build requirements
+
+- C compiler, for example `gcc` or `clang`
+- `make`
+
+### Runtime requirements
+
+Linux:
+
+- `xdg-open`
+
+macOS:
+
+- `open`, included by default
+
+Optional on Linux:
+
+- `zenity`, for graphical dialogs
+- `notify-send`, for desktop notifications
+
+---
+
+## Limitations
+
+LNK Reader is a best-effort tool.
+
+It supports many common `.lnk` files, but not every possible advanced shortcut feature.
+
+Network folders may still require login credentials.
+
+SMB links depend on the operating system’s SMB support.
+
+If a shortcut points to a file that does not exist anymore, LNK Reader cannot open it.
+
+---
+
+## Troubleshooting
+
+### The shortcut does not open
+
+Try running:
+
+```bash
+open_lnk --debug file.lnk
+```
+
+Then check the log file:
+
+```text
+~/.cache/windows-link-reader/open_lnk.log
+```
+
+---
+
+### The wrong folder opens
+
+Clear the remembered choices:
+
+```bash
+open_lnk --clear-cache
+```
+
+Then try opening the `.lnk` file again.
+
+---
+
+### A network share asks for a password
+
+That is normal if the SMB share is protected.
+
+LNK Reader can open the SMB address, but the operating system handles authentication.
+
+---
+
+## Support
+
+If you find a real bug or have a useful suggestion, please open an issue:
+
+```text
+https://github.com/SECRET-GUEST/windows_link_reader/issues
+```
+
+When reporting a bug, please include:
+
+- your operating system
+- what the `.lnk` file points to, if possible
+- whether the target is local, mounted, or network-based
+- the log file, if available
+
+---
+
+## License
+
+See the license file in this repository.
 ```
      _ ._  _ , _ ._            _ ._  _ , _ ._    _ ._  _ , _ ._      _ ._  _ , _ .__  _ , _ ._   ._  _ , _ ._   _ , _ ._   .---.  _ ._   _ , _ .__  _ , _ ._   ._  _ , _ ._      _ ._  _ , _ .__  _ , _ . .---<__. \ _
    (_ ' ( `  )_  .__)        (_ ' ( `  )_  .__ (_ ' ( `  )_  .__)  (_ '    ___   ._( `  )_  .__)  ( `  )_  .__)   )_  .__)/     \(_ ' (    )_  ._( `  )_  .__)  ( `  )_  .__)  (_ ' ( `  )_  ._( `` )_  . `---._  \ \ \
